@@ -31,37 +31,49 @@ shift-pilot-svc expose **quatre endpoints HTTP en lecture seule** qui retournent
 
 **Description** : Consulter la version servie en ce moment — SHA déployé, environnement, schéma appliqué, horodatage.
 
-**Réponse** (200 OK) :
+**Réponse** (200 OK, avec fichier `deployed-version.json`) :
 ```json
 {
   "sha": "17ae996ea128bea1876cacb5f08d4c76f1fc6e46",
   "ref": "staging",
   "environnement": "staging",
-  "schemaVersion": 1,
-  "deployedAt": "2026-08-08T06:37:00Z"
+  "deployedAt": "2026-08-08T06:37:00Z",
+  "schemaVersion": 1
 }
 ```
 
+**Réponse** (200 OK, sans fichier `deployed-version.json`) :
+```json
+{
+  "sha": null,
+  "ref": null,
+  "deployedAt": null,
+  "schemaVersion": 1
+}
+```
+**Note** : En l'absence du fichier, la clé `environnement` **n'existe pas** (pas créée par le fallback de `index.php:19`).
+
 **Comportement** :
-- Champs `sha`, `ref`, `environnement`, `deployedAt` sont lus depuis le fichier `deployed-version.json` à la racine
+- Champs `sha`, `ref`, `deployedAt` sont lus depuis le fichier `deployed-version.json` à la racine (code `index.php:17-19`)
   - Jamais déduits du code Git courant
-  - Si ce fichier n'existe pas → ces champs valent `null`
+  - Si ce fichier n'existe pas → ces trois champs valent `null`, et `environnement` est **absent**
+  - Si ce fichier existe → tous les champs du fichier sont retournés as-is
   
 - `schemaVersion` est :
-  - D'abord cherché dans `deployed-version.json`
+  - D'abord cherché dans `deployed-version.json` (si le fichier fournit ce champ)
   - Si absent du fichier → lu depuis la base (requête `MAX(version)` en table `schema_migrations`)
   - **Priorité** : le fichier prime sur la base live (permet une version servie stable)
   
 - Contenu-type : `application/json`
 
 **Cas d'erreur** :
-- `deployed-version.json` absent → champs `sha/ref/environnement/deployedAt` valent `null`, schémaVersion lu depuis la base
-- Lire depuis le fichier n'échoue jamais (fallback à tableau vide)
+- `deployed-version.json` absent → `sha/ref/deployedAt` valent `null`, `environnement` absent, `schemaVersion` lu depuis la base
+- Panne SQLite lors de la lecture du schéma → `PDOException` non attrapée (pas de try/catch) → réponse HTTP dépend de la config PHP (ligne 11 de `index.php`)
 
 **Chaînon critique** (hors dépôt) :
 - Le pipeline écrit `deployed/<env>/version.json` sur la branche `deployed`
 - Un mécanisme externe (hébergement, webhook, script de déploiement) doit copier ce fichier en `deployed-version.json` à la racine du projet servi
-- **Si ce mécanisme est absent** → `/version` retournerait des champs nuls
+- **Si ce mécanisme est absent** → `/version` retournerait `sha/ref/deployedAt` nuls, `environnement` absent, et `schemaVersion` uniquement depuis la base
 
 ### `GET /orders` — Lister toutes les commandes
 
@@ -72,14 +84,35 @@ shift-pilot-svc expose **quatre endpoints HTTP en lecture seule** qui retournent
 [
   {
     "id": 1,
-    "client": "Clients A",
-    "montant_cents": 1500,
+    "client": "Heiata",
+    "montant_cents": 420000,
     "devise": "XPF",
     "statut": "payee"
   },
   {
     "id": 2,
-    "client": "Client B",
+    "client": "Teiki",
+    "montant_cents": 180000,
+    "devise": "XPF",
+    "statut": "annulee"
+  },
+  {
+    "id": 3,
+    "client": "Manoa",
+    "montant_cents": 960000,
+    "devise": "XPF",
+    "statut": "payee"
+  },
+  {
+    "id": 4,
+    "client": "Vaite",
+    "montant_cents": 305000,
+    "devise": "XPF",
+    "statut": "payee"
+  },
+  {
+    "id": 5,
+    "client": "Moana",
     "montant_cents": 75000,
     "devise": "XPF",
     "statut": "annulee"
@@ -112,16 +145,16 @@ shift-pilot-svc expose **quatre endpoints HTTP en lecture seule** qui retournent
 ```json
 {
   "id": 1,
-  "client": "Client A",
-  "montant_cents": 1500,
+  "client": "Heiata",
+  "montant_cents": 420000,
   "devise": "XPF",
   "statut": "payee"
 }
 ```
 
 **Paramètre** :
-- `{id}` : identifiant entier positif requis
-- Validation : regex `#^/orders/(\d+)$#`
+- `{id}` : identifiant entier positif requis (1 à 5 pour les données initiales)
+- Validation : regex `#^/orders/(\d+)$#` (ligne 35 de `public/index.php`)
   - Seulement des chiffres acceptés
   - Identifiants non entiers → 404 (route inconnue)
 
@@ -159,11 +192,11 @@ shift-pilot-svc expose **quatre endpoints HTTP en lecture seule** qui retournent
 **Données actuelles** (depuis `migrations/001_init.sql:15-20`) :
 ```sql
 INSERT INTO orders (id, client, montant_cents, devise, statut) VALUES
-  (1, 'Client A', 1500, 'XPF', 'payee'),
-  (2, 'Client B', 75000, 'XPF', 'annulee'),
-  (3, 'Client C', 3200, 'XPF', 'payee'),
-  (4, 'Client D', 500, 'XPF', 'annulee'),
-  (5, 'Client E', 12000, 'XPF', 'payee');
+  (1, 'Heiata', 420000, 'XPF', 'payee'),
+  (2, 'Teiki',  180000, 'XPF', 'annulee'),
+  (3, 'Manoa',  960000, 'XPF', 'payee'),
+  (4, 'Vaite',  305000, 'XPF', 'payee'),
+  (5, 'Moana',   75000, 'XPF', 'annulee');
 ```
 
 **Registre de schéma** (`schema_migrations`) :
@@ -241,9 +274,10 @@ Si le service évolue :
 Tout endpoint **doit** :
 - Retourner du JSON valide (`Content-Type: application/json`)
 - Retourner un code HTTP approprié (200, 404, 500)
-- En cas d'erreur → toujours retourner un JSON avec champ `error`
+- En cas **d'erreur gérée** (ex. `/orders/{id}` absent) → retourner un JSON avec champ `error`
+  - **Important** : Les exceptions PDO (pannes SQLite, requête invalide) **ne sont pas attrapées** → pas de JSON structuré, sorte dépend de la config PHP (lignes 11, 36 de `index.php`)
 - Jamais inventer de version depuis le code (laisser `/version` en charge)
-- Respecter l'ordre de lecture : fichier > base > null
+- Respecter l'ordre de lecture : fichier > base > null (pour `/version`)
 
 ## Références
 

@@ -134,12 +134,12 @@ curl -s http://127.0.0.1:8080/version | jq .
 ### Vérifications
 
 - [ ] Code HTTP 200
-- [ ] Réponse JSON avec 5 champs :
+- [ ] Réponse JSON avec 4 champs :
   - `sha` : `null` (aucun fichier `deployed-version.json` en local)
   - `ref` : `null`
-  - `environnement` : `null`
   - `deployedAt` : `null`
   - `schemaVersion` : `1` (lu depuis la base)
+- [ ] **Important** : clé `environnement` **absent** (pas créée par le fallback, ligne 19 de `index.php`)
 
 ### Vérification avec fichier de déploiement (simulation)
 
