@@ -16,13 +16,13 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 - **Consommateur API** : Lit les quatre endpoints publics (`/health`, `/version`, `/orders`, `/orders/{id}`) sans authentification. Accès en lecture seule, aucune mutation permise.
 
 ### Opérateurs internes
-- **Développeur** : Clone le dépôt, exécute `composer test` et `composer migrate:dry` localement. Peut créer des branches de test, pousser sur `staging`, déclencher le déploiement.
-- **Agent CI/CD** (GitHub Actions) : Exécute les tests, applique les migrations (`composer migrate`), publie la version sur `deployed`.
-- **Administrateur production** : Anime la promotion `staging` → `main` (hors chaîne d'agents, geste manuel).
+- **Développeur** : Clone le dépôt, exécute `composer test` et `composer migrate:dry` localement. Peut créer des branches de test et pousser sur `staging`. Le déploiement se déclenche automatiquement via CI/CD après le push.
+- **Agent CI/CD** (GitHub Actions) : Exécute les tests, applique les migrations (`composer migrate`), publie la version sur la branche `deployed`. Automatisé, pas d'intervention manuelle.
+- **Promoteur staging → main** : Mentionné dans README comme un geste manuel, mais **rôle et autorisations ne sont pas configurés dans le dépôt fourni**. La garantie repose sur la discipline procédurale.
 
 ### Systèmes
-- **GitHub Actions** : Orchestre CI/CD, exécute les migrations en isolation (`ubuntu-latest`), pousse sur `deployed`.
-- **Serveur web** : Héberge la version servie, dépose `deployed-version.json` (hors dépôt), enregistre les appels API.
+- **GitHub Actions** : Orchestre CI/CD, exécute les migrations en isolation (`ubuntu-latest`), pousse sur `deployed`. Déclenchement : push sur `main` ou `staging`.
+- **Serveur web** : Héberge la version servie. **Note** : L'enregistrement des appels API n'est pas implémenté dans le code fourni (`public/index.php` n'a pas de logging). Le dépôt ne documente pas ce mécanisme.
 
 ---
 
@@ -54,9 +54,10 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 - **Comportement absent** : Si l'ID n'existe pas, le statut HTTP est 404 et le corps est `{"error": "Commande introuvable"}`.
 - **Preuve** : `src/Orders.php:18-24`, méthode `find($id)` retourne `null` si absent ; `public/index.php:34-44` traduit `null` en réponse 404 + JSON d'erreur ; test `OrdersTest.php::testIdentifiantInconnuRenvoieNull()`.
 
-#### Règle 1.3 : Tous les appels à `/orders` et `/orders/{id}` retournent du JSON valide avec le schéma défini
-- **Énoncé** : Chaque commande JSON porte les champs `id` (INTEGER), `client` (TEXT), `montant_cents` (INTEGER), `devise` (TEXT, défaut 'XPF'), `statut` (TEXT). Tous obligatoires, jamais null pour des commandes existantes.
-- **Preuve** : Jeu de données `001_init.sql` définit le schéma et 5 lignes d'exemple ; `src/Orders.php:15,20` structure les SELECT ; tests `OrdersTest.php::testMontantsStockesEnCentimesEntiers()` et `testTrouveUneCommandeParIdentifiant()` vérifient les champs.
+#### Règle 1.3 : Schéma JSON de chaque commande — champs et types
+- **Énoncé** : Chaque commande en base porte les champs `id` (INTEGER), `client` (TEXT), `montant_cents` (INTEGER), `devise` (TEXT, défaut 'XPF'), `statut` (TEXT). Tous obligatoires en base.
+- **Ce qui est prouvé** : Jeu de données `001_init.sql` définit les 5 lignes ; `src/Orders.php:15,20` récupère les champs via SELECT ; tests `OrdersTest.php::testMontantsStockesEnCentimesEntiers()` et `testTrouveUneCommandeParIdentifiant()` vérifient les types en couche Orders (pas HTTP).
+- **Ce qui n'est pas prouvé** : Le codes HTTP de réussite (nominalement 200), la structure HTTP de la réponse (nominalement JSON valide au format attendu), et les codes d'erreur HTTP (`public/index.php` n'est pas couvert par la suite de test). Ces comportements sont accessibles via recette manuelle (voir `CAHIER_RECETTE.md`), pas par une suite automatisée.
 
 ---
 
@@ -66,15 +67,17 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 **Déclencheur** : Push sur `staging` ou `main`  
 **Résultat** : Code exécuté sur le serveur, version enregistrée sur `deployed`
 
-#### Règle 2.1 : Staging et production sont isolés sur Git
-- **Énoncé** : Un push sur `staging` ne doit jamais modifier `deployed/production/version.json` sur la branche `deployed`. Les deux environnements restent isolés.
+#### Règle 2.1 : Isolation staging/production sur la branche Git `deployed`
+- **Énoncé** : Un push sur `staging` ne doit jamais modifier `deployed/production/version.json` sur la branche Git `deployed`. Les deux environnements restent isolés **au niveau du dépôt**.
+- **Garantie limitée à Git** : Cette isolation s'applique à l'artefact Git (`deployed/<env>/version.json` sur la branche `deployed`). Le fichier sur le serveur web (`deployed-version.json` à la racine du projet servi) dépend du script d'hébergement — voir « Questions ouvertes ».
 - **Mécanisme** : Deux fichiers de version distincts (`deployed/staging/version.json` et `deployed/production/version.json`) coexistent sur la branche `deployed` sans jamais s'écraser.
-- **Règle de pipeline** : La branche cible du `version.json` est déterminée par `github.ref_name` — une variable immuable du déclencheur Git.
-- **Preuve** : `.github/workflows/deploy.yml:38-41` — expression GitHub Actions `github.ref_name == 'main' && 'production' || 'staging'` ; `mkdir -p "$CIBLE"` isole les répertoires ; commit da34e1e (correction du bug d'écrasement inter-environnements) documenté dans README et carte des domaines.
+- **Règle de pipeline** : La branche cible du `version.json` est déterminée par `github.ref_name` — une variable immuable du déclencheur Git (`main` → `production`, autres branches → `staging`).
+- **Preuve** : `.github/workflows/deploy.yml:38-41` — expression GitHub Actions `github.ref_name == 'main' && 'production' || 'staging'` ; `mkdir -p "$CIBLE"` isole les répertoires ; commit da34e1e (correction du bug d'écrasement inter-environnements).
 
-#### Règle 2.2 : Pas de publication sans suite verte
-- **Énoncé** : Si la suite de tests échoue, aucune nouvelle version n'est publiée sur la branche `deployed` ; la version Git précédente reste inchangée.
-- **Mécanisme** : `composer test` (PHPUnit) s'exécute **avant** les migrations et la publication. Tout `exit` non-zéro arrête le workflow.
+#### Règle 2.2 : Publication conditionnelle à la suite verte (artefact Git)
+- **Énoncé** : Si la suite de tests échoue, aucune nouvelle version n'est publiée sur la branche `deployed` ; l'artefact Git précédent reste inchangé.
+- **Garantie limitée à Git** : Cette garantie s'applique à la branche `deployed`. L'état du fichier serveur (`deployed-version.json`) dépend du script d'hébergement — voir « Questions ouvertes ».
+- **Mécanisme** : `composer test` (PHPUnit) s'exécute **avant** les migrations et la publication. Tout `exit` non-zéro arrête le workflow, empêchant le push sur `deployed`.
 - **Preuve** : `.github/workflows/deploy.yml:31-32` — ordre des étapes ; commentaire « Test avant publication ».
 
 #### Règle 2.3 : Chaque publication enregistre le SHA et l'horodatage réels
@@ -82,9 +85,11 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 - **Données** : Champs `sha` (GitHub SHA), `ref` (branche git), `environnement` (`staging` ou `production`), `schemaVersion` (version en base), `deployedAt` (UTC).
 - **Preuve** : `.github/workflows/deploy.yml:44-64` — lecture du SHA depuis GitHub Actions, construction du JSON avec `date -u +%Y-%m-%dT%H:%M:%SZ`.
 
-#### Règle 2.4 : Promotion staging → production est hors chaîne d'agents
-- **Énoncé** : Aucun agent n'est autorisé à pousser sur `main`. La promotion est un geste manuel, effectué par Maintenance ou Production.
-- **Preuve** : README.md — « La Maintenance et la Production préparent, vérifient et **passent la main** » ; `socle-agence` énumère les environnements et leur autonomie : seul `staging` est autonome pour `T-SVC`.
+#### Règle 2.4 : Promotion staging → production est un geste manuel (hors pipeline)
+- **Énoncé** : La promotion de `staging` vers `main` (et donc vers `production`) est documentée comme un geste manuel — aucun agent n'effectue automatiquement ce push.
+- **Geste documenté** : README.md évoque la promotion ; la branche `main` nécessite un merge/push intentionnel.
+- **Limitation** : Aucun contrôle d'accès (branch protection, permissions GitHub) n'est visible dans le dépôt fourni pour **forcer** cette manualité ; la garantie repose sur la discipline procédurale, pas sur la technique.
+- **Preuve** : `.github/workflows/deploy.yml:11` énumère `[main, staging]` comme branches déclencheurs — à contrario, aucune branche de test n'apparaît.
 
 ---
 
@@ -130,24 +135,26 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 **Déclencheur** : Succès du workflow de déploiement  
 **Résultat** : Fichier `version.json` publié et accessible
 
-#### Règle 4.1 : La version servie ne se déduit jamais du code
-- **Énoncé** : La version **vraiment** déployée est celle enregistrée dans `deployed/<env>/version.json` sur la branche `deployed`, jamais supposée depuis le code ou les constantes.
-- **Corollaire** : Le champ `schemaVersion` dans le JSON est toujours lu **en base en temps réel** au moment de l'appel, ajouté au tableau du fichier par l'opérateur `+`. Si le fichier contient déjà `schemaVersion`, la valeur du fichier **prime** (opérateur `+` en PHP préserve les clés de l'opérande gauche).
+#### Règle 4.1 : Artefact Git (branche `deployed`) vs fichier serveur — deux domaines distincts
+- **Énoncé** : La source de vérité Git (`deployed/<env>/version.json` sur la branche `deployed`) est toujours **publiée** par le workflow CI/CD après un merge réussi. Le fichier à la racine du serveur (`deployed-version.json`, qui contient également `schemaVersion`) est **hors périmètre du dépôt** — sa présence et son contenu dépendent du script d'hébergement.
+- **Corollaire du champ `schemaVersion`** : Le champ est **lu en temps réel en base** par `Db::schemaVersion($pdo)`, puis ajouté au tableau du fichier par l'opérateur `+` de PHP. **La priorité est celle du tableau gauche** : si le fichier `deployed-version.json` décodé contient déjà `schemaVersion`, la valeur du fichier est **conservée** (l'opérateur `+` préserve les clés du premier opérande). Si absent du fichier, la valeur de la base est ajoutée.
 - **Contrat du endpoint `/version` — trois cas mutuellement exclusifs** :
-  - **Cas 1 — Fichier `deployed-version.json` absent (local)** : 
+  - **Cas 1 — Fichier `deployed-version.json` absent (nominal local)** : 
     - **Code** : `public/index.php:16-19` fallback vers `['sha' => null, 'ref' => null, 'deployedAt' => null]`
     - **Résultat** : `{"sha": null, "ref": null, "deployedAt": null, "schemaVersion": <N>}` où `<N>` est la version lue en base en temps réel.
     - **Clé `environnement`** : **Absente du JSON** (pas créée par le fallback).
     - **HTTP** : 200 OK (JSON valide produit).
-  - **Cas 2 — Fichier présent et JSON valide, avec ou sans `schemaVersion`** :
+  - **Cas 2 — Fichier présent et JSON valide** :
     - **Code** : `public/index.php:17-18` décode le fichier, `json_decode()` retourne un tableau associatif. Ligne 27 fusionne avec `$version + ['schemaVersion' => <N>]` où `<N>` est lue en base.
-    - **Priorité** : L'opérateur `+` de PHP préserve les clés du tableau gauche (`$version`). Si le fichier **contient** déjà `schemaVersion`, la valeur du fichier est conservée ; si absent, la valeur de la base est ajoutée.
-    - **Résultat** : Tous les champs du fichier décodé sont présents (ex: `sha`, `ref`, `environnement`, `deployedAt`), plus `schemaVersion` depuis le fichier **ou** la base selon sa présence dans le fichier.
+    - **Priorité de `schemaVersion`** : L'opérateur `+` de PHP préserve les clés du tableau **gauche** (`$version` = contenu du fichier décodé). 
+      - **Si le fichier contient déjà `schemaVersion`** : La valeur du fichier est conservée (n'est pas écrasée par la base).
+      - **Si le fichier n'a pas `schemaVersion`** : La valeur de la base est ajoutée.
+    - **Résultat** : Tous les champs du fichier décodé sont présents (ex: `sha`, `ref`, `environnement`, `deployedAt`), plus `schemaVersion` depuis le fichier **OU** la base selon sa présence dans le fichier.
     - **HTTP** : 200 OK (JSON complètement peuplé).
   - **Cas 3 — Fichier présent mais JSON invalide ou malformé** :
     - **Code** : `public/index.php:18` `json_decode()` retourne `null` (JSON invalide). Ligne 27 exécute `$version + [...]` où `$version` est `null`.
     - **Erreur** : PHP lève une `TypeError` : « Unsupported operand type(s) for +: null and array » (opérateur `+` non défini pour null).
-    - **Résultat** : Aucun JSON d'erreur structuré. Réponse HTTP 500 sans corps, ou body = stack PHP brut (dépend de `display_errors` en production).
+    - **Résultat** : Aucun JSON d'erreur structuré. Réponse HTTP 500 sans corps, ou body = stack PHP brut (dépend de `display_errors` en production). **Blocage complet du endpoint `/version`**.
     - **Implication métier** : Erreur grave — indique un fichier `deployed-version.json` corrompu sur le serveur de déploiement.
 - **Gestion des erreurs globales** : Le routeur `public/index.php:11-47` n'enveloppe pas `Db::connect()` (ligne 11) ni les appels Orders/Db dans un bloc `try/catch` global. Toute exception PDO (base indisponible, requête invalide, etc.) s'échappe sans interception — aucun JSON d'erreur structuré n'est produit, la réponse dépend de la config serveur. En particulier, l'opérateur `+` à la ligne 27 n'est pas protégé : si `$version` est `null` (cas 3 — JSON invalide), PHP lève une `TypeError` qui s'échappe non capturée. Seul le cas `/orders/{id}` absent produit un JSON d'erreur : `{"error": "Commande introuvable"}` (ligne 39).
 - **Preuve** : `public/index.php:8-47` — pas de bloc `try/catch` global ; cas 1 (fallback) lignes 16-19 ; cas 2 (fusion) ligne 27 ; cas 3 (TypeError) impossibilité de `null + array` ; `CAHIER_RECETTE.md` section 4.3 décrit le cas fichier absent.
@@ -178,7 +185,9 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 **État et cycle de vie** :
 - État initial : 5 commandes fictives insérées par `001_init.sql` au démarrage (Heiata, Teiki, Manoa, Vaite, Moana).
 - Pas de suppression, pas de mise à jour, pas d'insertion via l'API — ensemble immuable une fois déployé.
-- **Cycle complet** : Insertion en base (migration `001_init.sql`) → persistance jusqu'à nouvel ordre → rollback possible (via sauvegarde + restauration manuelle hors API).
+- **Cycle** : Insertion en base (migration `001_init.sql`) → persistance jusqu'à nouvel ordre. 
+  - **Rollback de la migration courante** : Prouvé par le mécanisme transactionnel de `bin/migrate.php:62-76` (un bloc `BEGIN/ROLLBACK` isole chaque migration).
+  - **Restauration après déploiement** : Une sauvegarde horodatée est créée obligatoirement (preuve : `bin/migrate.php:50-59`), mais la procédure complète de restauration (copie du backup sur `data/app.db` + vérification + test) n'est que manuelle, hors chaîne d'agents automatisés.
 
 **Absence de contraintes métier**:
 - Pas de contrainte UNIQUE sur `email` (doublons possibles).

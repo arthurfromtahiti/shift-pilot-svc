@@ -24,6 +24,7 @@ Valider les quatre scénarios critiques du service shift-pilot-svc :
 - [ ] PHP 8.1+ installé (`php --version`)
 - [ ] Composer installé (`composer --version`)
 - [ ] Git configuré (`git config user.name`, `git config user.email`)
+- [ ] SQLite CLI (`sqlite3 --version`) — utilisé en Phase 2 pour vérifier l'état de la base
 - [ ] Accès GitHub Actions lisible (pas d'API token spécial requis pour lire les logs)
 
 ### Dépôt local
@@ -118,19 +119,24 @@ rm -rf /tmp/shift-pilot-test
 
 ### Étape 2.1 — Essai à blanc
 
-- [ ] **2.1.1** : Dans le clone isolé, exécuter le dry-run
+- [ ] **2.1.1** : Dans le clone isolé, vérifier l'état initial de la base
   ```bash
   cd /tmp/shift-pilot-test/shift-pilot-svc
   php bin/migrate.php --dry-run
   ```
-  Vérifier : Affichage du contenu SQL de `001_init.sql` (création des tables, insertion des données). **Aucun fichier ne doit être modifié.**
+  Comportement attendu — **deux cas mutuellement exclusifs** :
+  
+  - **Cas A : Base vierge (v0)** : Affichage du contenu SQL de `001_init.sql` (création des tables, insertion des 5 commandes).
+  - **Cas B : Base déjà migrée (v1)** : Message « Aucune migration à appliquer » (la base a déjà le schéma complet).
+  
+  **Si vous êtes en cas B** : Exécutez `rm -f data/app.db && php bin/migrate.php --dry-run` pour repartir d'une base vierge. Le reste de Phase 2 suppose la base à v0.
 
 - [ ] **2.1.2** : Vérifier que `data/app.db` n'a pas changé
   ```bash
   ls -la data/app.db
   # Noter l'horodatage
   ```
-  Ré-exécuter le dry-run, vérifier que l'horodatage de `data/app.db` n'a pas changé.
+  Ré-exécuter le dry-run, vérifier que l'horodatage de `data/app.db` n'a pas changé (essai à blanc ne modifie rien).
 
 ### Étape 2.2 — Application réelle avec sauvegarde
 
@@ -139,14 +145,23 @@ rm -rf /tmp/shift-pilot-test
   cd /tmp/shift-pilot-test/shift-pilot-svc
   php bin/migrate.php
   ```
-  Sortie attendue :
-  ```
-  Version de schéma courante : 0
-  À appliquer : migrations/001_init.sql
-  Sauvegarde obligatoire créée : data/backups/app-<YYYYMMDD-HHmmss>-avant-v1.db
-  [... application de la migration ...]
-  Version de schéma finale : 1
-  ```
+  Sortie attendue — **selon l'état de la base** :
+  
+  - **Si base à v0 (vierge)** :
+    ```
+    Version de schéma courante : 0
+    À appliquer : migrations/001_init.sql
+    Sauvegarde obligatoire créée : data/backups/app-<YYYYMMDD-HHmmss>-avant-v1.db
+    [... application de la migration ...]
+    Version de schéma finale : 1
+    ```
+  
+  - **Si base déjà à v1** :
+    ```
+    Version de schéma courante : 1
+    Aucune migration à appliquer
+    ```
+    (Aucune sauvegarde n'est créée car aucune migration n'est appliquée.)
 
 - [ ] **2.2.2** : Vérifier la sauvegarde a été créée
   ```bash
@@ -308,55 +323,44 @@ rm -rf /tmp/shift-pilot-test
   - Tests PHPUnit (`composer test`)
   - Tous les checks doivent être verts ✓
 
-- [ ] **5.1.6** : Annuler la PR (fermer sans fusionner)
+- [ ] **5.1.6** : Annuler la PR (fermer sans fusionner) et nettoyer
   ```bash
   # Sur GitHub, cliquer "Close pull request"
   # Localement :
   git checkout staging
   git branch -D test/staging-recette
   git push origin --delete test/staging-recette
+  git pull origin staging
   ```
+  Vérifier : Le fichier `.test-recette-trigger` a disparu de `staging` (il existait uniquement sur la branche de test).
 
 ### Étape 5.2 — Vérifier la publication sur la branche `deployed` (artefact Git, pas le fichier servi)
 
 **⚠️ Important** : Cette étape valide que `deploy.yml` a **écrit** `deployed/<env>/version.json` sur la branche Git `deployed`. **Ce n'est pas le fichier que le code lit en production** (`public/index.php` lit `deployed-version.json` sur le disque du serveur). Le lien entre ces deux fichiers est hors dépôt (copie par webhook, script, ou mécanisme hébergement).
 
-- [ ] **5.2.1** : Récupérer la branche `deployed`
+- [ ] **5.2.1** : Récupérer la branche `deployed` et capturer la version production
   ```bash
   git fetch origin deployed
+  git show origin/deployed:production/version.json > /tmp/prod-version-before.json
   ```
+  Vérifier : Fichier créé avec contenu JSON valide.
 
-- [ ] **5.2.2** : Lire la version publiée pour `staging` (Git artefact)
+- [ ] **5.2.2** : Lire la version publiée pour `staging` après votre push
   ```bash
   git show origin/deployed:staging/version.json
   ```
   Vérifier : Les champs `sha`, `ref`, `environnement`, `schemaVersion`, `deployedAt` sont présents et non `null`.
 
-- [ ] **5.2.3** : Vérifier que `production` n'a pas été modifiée
+- [ ] **5.2.3** : Vérifier que `production` n'a **pas** été modifiée par le workflow staging
   
-  Capturer le contenu avant le test :
-  ```bash
-  git show origin/deployed:production/version.json > /tmp/prod-version-before.json
-  ```
-  
-  Effectuer un second push sur `staging` et attendre le workflow :
-  ```bash
-  cd ~/shift-pilot-svc
-  git checkout test/staging-recette
-  echo "# Second test $(date +%s)" >> .test-recette-trigger
-  git add .test-recette-trigger
-  git commit --amend -m "test(recette): second validation pipeline staging"
-  git push origin test/staging-recette --force-with-lease
-  ```
-  
-  Attendre le workflow, puis vérifier que production n'a pas changé :
+  Comparer le contenu avant et après :
   ```bash
   git fetch origin deployed
   git show origin/deployed:production/version.json > /tmp/prod-version-after.json
   diff /tmp/prod-version-before.json /tmp/prod-version-after.json
   ```
   
-  Résultat attendu : Aucune différence (fichier `production/version.json` inchangé). Cela confirme l'isolation entre `staging` et `production`.
+  Résultat attendu : Aucune différence (la sortie de `diff` est vide). Cela confirme l'isolation entre `staging` et `production` — un push sur `staging` ne modifie jamais `deployed/production/version.json`.
 
 ---
 
