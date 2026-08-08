@@ -235,10 +235,16 @@ deuxième migration, la base versionnée sera en retard d'une version par rappor
 appliqué lors du déploiement.
 
 **Stratégie actuelle** : la base versionnée = état zéro des migrations. Toutes les migrations
-s'appliquent à chaque déploiement.
+s'appliquent à chaque déploiement (elles s'appliquent contre la base initiale à chaque run).
 
-**Risque** : après un déploiement qui inclut la migration 2, un checkout donnera une base à v1.
-Décalage possible entre `data/app.db` et la présence de `002_*.sql`.
+**Tension** : 
+- ✓ Avantage : les migrations s'appliquent prévisiblement, en isolation, sur un état connu
+- ✗ Risque : après un déploiement qui inclut la migration 2, un checkout du dépôt donnera une 
+  base à v1. Décalage possible entre `data/app.db` et la présence de `002_*.sql`.
+
+**Décision requise** : faut-il mettre à jour `data/app.db` en CI après chaque nouvelle migration, 
+ou accepter ce décalage ? Voir `QUESTIONS_OUVERTES.md` et `GUIDE_MIGRATIONS.md` section « La base 
+versionnée ».
 
 ## Points d'extension
 

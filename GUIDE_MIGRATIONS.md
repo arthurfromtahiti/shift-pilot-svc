@@ -180,20 +180,30 @@ Si une migration échoue ou doit être annulée :
 - **Doublons silencieux** : si deux fichiers portent le même préfixe (ex. `002_a.sql` et
   `002_b.sql`), le premier disparaît sans avertissement. **À éviter absolutement**.
 
-### La base versionnée
+### La base versionnée — question ouverte
 
-`data/app.db` dans le dépôt est à l'état initial (v1). Si une deuxième migration est ajoutée,
-la base versionnée **n'est pas mise à jour en CI**. Un checkout post-déploiement donnera une
-base à v1, non v2. C'est l'état actuel et intentionnel (la base versionnée = état zéro).
+`data/app.db` dans le dépôt est actuellement à l'état initial (v1). Si une deuxième migration 
+est ajoutée :
 
-Si cette stratégie change, `data/app.db` doit être mis à jour explicitement après chaque
-nouvelle migration.
+- **Stratégie actuelle** : la base versionnée **n'est pas mise à jour en CI**. Un checkout 
+  post-déploiement donnera une base à v1, non v2. La base versionnée reste l'état zéro d'où 
+  les migrations s'appliquent.
+- **Risque** : après un déploiement qui inclut la migration 2, un checkout du dépôt donnera une 
+  base à v1, créant un décalage entre le schéma versionné et les migrations présentes.
+- **Décision requise** : faut-il mettre à jour `data/app.db` automatiquement en CI après chaque 
+  nouvelle migration, ou accepter que la base versionnée reste à v1 et que toutes les migrations 
+  s'appliquent à chaque déploiement ? Voir `QUESTIONS_OUVERTES.md`.
 
 ### Sauvegardes en CI
 
-Les sauvegardes dans `data/backups/` sont éphémères en CI — supprimées après le run. En
-production, il faut une stratégie externe de sauvegarde de la base servie **avant** le
-déploiement.
+Les sauvegardes dans `data/backups/` sont **éphémères en CI** — créées, puis supprimées après 
+le run GitHub Actions. Aucune sauvegarde ne persiste sur le serveur après un déploiement CI.
+
+**Conséquence** : en production, un incident après l'application d'une migration exige une 
+sauvegarde **externe** de `data/app.db` créée **avant** le déploiement (sur l'hôte, système 
+de fichiers, ou service de backup). Les sauvegardes en CI ne servent qu'à l'isolation locale 
+du run — une migration en échec rejette immédiatement, sans qu'une sauvegarde CI ne puisse 
+aider au rollback.
 
 ## Exemples
 
@@ -238,11 +248,15 @@ les checkouts sur les branches qui la contiennent. Marquer-la comme obsolète da
 nouvelle migration si nécessaire.
 
 **Q: Que se passe-t-il si une migration échoue en déploiement ?**
-1. La migration courante est annulée (ROLLBACK)
-2. Les migrations antérieures de la même exécution restent appliquées
-3. Le script quitte avec code 1
+1. La migration courante est annulée (ROLLBACK par l'instruction `beginTransaction()` du wrapper)
+2. Les migrations antérieures de la même exécution **restent appliquées** — la base n'est pas 
+   automatiquement restaurée à l'état pré-déploiement
+3. Le script `bin/migrate.php` quitte avec code 1
 4. Le workflow `deploy.yml` s'arrête — la branche `deployed` n'est pas poussée
-5. La version reste celle du déploiement précédent
+5. La version sur `deployed` reste celle du déploiement précédent (source de vérité)
+6. **Important** : la base live sur l'hôte est dans un état partiel (certaines migrations 
+   appliquées, une échouée). Il faut soit restaurer manuellement depuis une sauvegarde externe, 
+   soit fixer le code et redéployer.
 
 **Q: Peut-on rollback manuel une migration ?**
 Pas de commande `composer rollback`. Il faut restaurer manuellement une sauvegarde :

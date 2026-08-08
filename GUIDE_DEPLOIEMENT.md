@@ -5,13 +5,17 @@
 Le déploiement est automatisé par GitHub Actions. Chaque push sur `staging` ou `main`
 déclenche un pipeline qui :
 
-1. Exécute les tests (PHPUnit)
-2. Applique les migrations non enregistrées
+1. Vérifie les tests (PHPUnit) et les migrations en CI
+2. Applique les migrations en cas de succès
 3. Écrit une version sur la branche `deployed`
 4. Pousse cette version sur `origin/deployed`
 
-Les deux branches (`staging` et `main`) ont des environnements distincts et ne s'interfèrent
-jamais.
+Les deux branches (`staging` et `main`) déploient indépendamment sur des répertoires distincts 
+de la branche `deployed` (`staging/version.json` vs `production/version.json`). 
+
+**Note importante** : la contention sur `deployed` reste possible si deux pipelines (ex. `staging` 
+et `main`) tentent de pousser simultanément — voir section **Concurrence et ordre** pour les 
+détails exacts et la mitigation appliquée.
 
 ## Les deux canaux distincts
 
@@ -52,6 +56,20 @@ jamais.
 **Point critique** : confondre les deux et laisser une chaîne d'agents fusionner sur `main`
 est l'échec que ce banc d'essai sert à détecter.
 
+---
+
+## Vérifications avant de pousser
+
+Le développeur **doit** vérifier localement avant tout push. Ne pas compter sur le CI pour 
+découvrir une erreur — les vérifications locales économisent un cycle CI :
+
+```bash
+php bin/migrate.php --dry-run    # Vérifier le SQL
+composer test                     # Vérifier les tests unitaires
+```
+
+Voir `GUIDE_MIGRATIONS.md` section « Avant de déployer une migration » pour les détails complets.
+
 ## Pipeline de déploiement (`.github/workflows/deploy.yml`)
 
 ### Déclencheurs
@@ -88,27 +106,21 @@ Exécute PHPUnit contre une base temporaire. **Si les tests échouent, le pipeli
 aucune migration n'est appliquée, aucune version n'est publiée. La version précédente reste
 sur la branche `deployed`.
 
-#### 3. Essai à blanc des migrations
+#### 3. Application réelle des migrations
 
-```bash
-php bin/migrate.php --dry-run
-```
-
-Affiche le contenu SQL des migrations qui s'appliqueraient, sans les exécuter. Utile pour la
-visibilité, pas un blocage (si le dry-run échoue, `deploy.yml` le laisserait passer, c'est
-une non-critique step).
-
-#### 4. Application réelle des migrations
-
+Le pipeline `.github/workflows/deploy.yml` (exécuté après la CI qui valide les tests) applique :
 ```bash
 php bin/migrate.php
 ```
+
+Les migrations appliquées en CI contre `data/app.db` versionné (état initial). La base modifiée 
+n'est pas commitée — à la prochaine migration, elle s'applique aussi contre l'état initial.
 
 Copie la base dans `data/backups/app-<horodatage>-avant-v<N>.db`, puis applique chaque
 migration en transaction. **Si une migration échoue, le pipeline s'arrête** — la version
 précédente reste sur `deployed`.
 
-#### 5. Détermination de l'environnement
+#### 4. Détermination de l'environnement
 
 ```bash
 CIBLE=$( [[ "${{ github.ref_name }}" == "main" ]] && echo "production" || echo "staging" )
@@ -116,7 +128,7 @@ CIBLE=$( [[ "${{ github.ref_name }}" == "main" ]] && echo "production" || echo "
 
 `main` → `production`, toute autre branche → `staging`.
 
-#### 6. Récupération de la branche `deployed`
+#### 5. Récupération de la branche `deployed`
 
 ```bash
 git fetch origin deployed --depth 1
@@ -124,7 +136,7 @@ git fetch origin deployed --depth 1
 
 Récupère la branche `deployed` pour ne pas écraser les fichiers de l'autre environnement.
 
-#### 7. Écriture du `version.json`
+#### 6. Écriture du `version.json`
 
 ```json
 {
@@ -138,7 +150,7 @@ Récupère la branche `deployed` pour ne pas écraser les fichiers de l'autre en
 
 Exemple : `deployed/staging/version.json` ou `deployed/production/version.json`.
 
-#### 8. Commit et push
+#### 7. Commit et push
 
 ```bash
 git add <environnement>/version.json
@@ -181,7 +193,26 @@ la source de vérité de ce qui a été publié.
 curl http://localhost:8080/version
 ```
 
-Retourne :
+**Séparation des responsabilités** :
+
+1. **Le workflow `deploy.yml` (repo)** écrit `staging/version.json` ou `production/version.json` 
+   **sur la branche `deployed`** — cela fonctionne de manière fiable.
+2. **L'endpoint `/version` (application)** lit le fichier `deployed-version.json` **à la racine 
+   du projet servi** — ce fichier doit être synchronisé par un processus **external au repo** 
+   (webhook post-deploy, script de synchronisation, mécanisme d'hébergement).
+
+**Sans ce mécanisme externe** :
+```json
+{
+  "sha": null,
+  "ref": null,
+  "deployedAt": null,
+  "schemaVersion": 1
+}
+```
+(seul `schemaVersion` est fourni, lu depuis la base)
+
+**Avec le mécanisme externe** :
 ```json
 {
   "sha": "abc123...",
@@ -192,10 +223,14 @@ Retourne :
 }
 ```
 
-**Important** : ce endpoint lit d'abord `deployed-version.json` à la racine du projet. Si ce
-fichier n'existe pas (mécanisme de dépôt absent ou défaillant), les champs `sha`, `ref`,
-`deployedAt` valent `null` — seul `schemaVersion` vient de la base. Voir le README pour
-les détails.
+**Responsabilité du déploiement** : implémenter la synchronisation :
+```bash
+# Sur l'hôte servi, après chaque déploiement CI
+git show origin/deployed:<env>/version.json > deployed-version.json
+```
+(où `<env>` est `staging` ou `production`)
+
+Voir `QUESTIONS_OUVERTES.md` pour la décision sur ce mécanisme.
 
 ## Points d'attention
 
@@ -211,10 +246,32 @@ hypothèse doit être clarifiée (faut-il mettre à jour `data/app.db` dans le d
 
 ### Concurrence et ordre
 
-- **Sur la même branche** : deux pushes rapides sont mis en file, non annulés (`cancel-in-progress: false`).
-  Le second déploiement attend que le premier finish.
+- **Sur la même branche** (`staging` ou `main`) : deux pushes rapides sont mis en file, non 
+  annulés (`cancel-in-progress: false`). Le second déploiement attend que le premier finisse.
 - **Sur des branches différentes** : les pipelines tournent en parallèle (groupes de concurrence
-  distincts).
+  distincts) — un push sur `staging` ne bloque pas un push sur `main`.
+
+### Contention sur la branche `deployed`
+
+**Situation** : les deux pipelines (`staging` et `main`) poussent sur la même branche `deployed`, 
+mais dans des répertoires séparés (`staging/version.json` vs `production/version.json`).
+
+**Protection** :
+```bash
+git push origin deployed --force-with-lease
+```
+
+Le `--force-with-lease` échoue si l'état distant a changé depuis le `git fetch` du pipeline — 
+cela empêche un pipeline d'écraser les modifications apportées par l'autre.
+
+**Scénario rare de conflit** :
+1. Déploiement `staging` : fetch `deployed`, écrit `staging/version.json`
+2. Déploiement `main` push `production/version.json` entre-temps
+3. Déploiement `staging` tente le push → échoue (bail de lease)
+4. Résolution : redéclencher manuellement le pipeline `staging`
+
+**Monitoring** : logs de `.github/workflows/deploy.yml` — erreur `failed to push some refs` 
+indique un conflit de lease rare.
 
 ### Base sans données initiales
 
@@ -275,14 +332,29 @@ Avant de fusionner sur `staging` ou `main`, l'agent/développeur/maintenance doi
 
 ### `/version` retourne des champs `null`
 
-1. **Cause possible** : le fichier `deployed-version.json` n'est pas sur l'hôte servi
-2. **Action** :
-   - Vérifier que le mécanisme de dépôt de `deployed-version.json` existe
-   - Ou extraire manuellement depuis la branche `deployed` :
+1. **Cause probable** : le fichier `deployed-version.json` n'est pas sur l'hôte servi
+2. **Explication** : 
+   - Le workflow `deploy.yml` écrit `<env>/version.json` (soit `staging/version.json`, soit 
+     `production/version.json`) sur la branche `deployed` dans le dépôt Git.
+   - L'endpoint `/version` de `public/index.php` lit le fichier `deployed-version.json` à la 
+     racine du projet servi (ligne 16-19).
+   - **Le maillon manquant** : aucun mécanisme du dépôt ne copie ce fichier de la branche 
+     `deployed` à la racine de l'hôte. Cela exige une étape externe : webhook post-deploy, 
+     script de dépôt, ou synchronisation filesystem.
+3. **Diagnostic** :
+   ```bash
+   # Sur l'hôte servi
+   ls -la deployed-version.json
+   # Sur le dépôt local
+   git show origin/deployed:staging/version.json
+   ```
+4. **Action de court terme** :
+   - Extraire manuellement et copier sur l'hôte :
      ```bash
      git show origin/deployed:<env>/version.json > deployed-version.json
      ```
      où `<env>` est `staging` ou `production`.
+   - Voir `QUESTIONS_OUVERTES.md` pour la décision sur le mécanisme de dépôt.
 
 ### `schemaVersion` en `/version` est obsolète
 

@@ -490,9 +490,11 @@ Accédez à GitHub Actions → cherchez le run pour ce push vers `main`.
 git checkout main
 git branch -D test/staging-deploy
 git push origin --delete test/staging-deploy
-git reset --hard HEAD~1  # Revenir à l'état initial
-git push origin main -f --force-with-lease
 ```
+
+**Note** : ne **pas** utiliser `git reset --hard` ou `git push -f` — ces commandes 
+écrasent l'historique. Si `main` doit revenir à un état antérieur, créer un nouveau commit 
+de correction plutôt que de réécrire l'historique.
 
 ---
 
@@ -500,26 +502,38 @@ git push origin main -f --force-with-lease
 
 ## 5.1 — Base indisponible
 
-### Requête : Renommer temporairement la base
+### Étape A : Renommer temporairement la base
 
 ```bash
 mv data/app.db data/app.db.bak
 ```
 
-### Requête : Appel HTTP
+### Étape B : Appel HTTP
 
 ```bash
 curl -s http://127.0.0.1:8080/orders 2>&1
 ```
 
-**Vérification** :
-- [ ] Une erreur est levée (PDOException non attrapée)
-- [ ] La réponse n'est pas du JSON valide
-- [ ] Restituer la base : `mv data/app.db.bak data/app.db`
+**Vérifications** :
+- [ ] Une erreur est levée (PDOException non attrapée de `public/index.php:11`)
+- [ ] La réponse n'est pas du JSON valide (réponse HTML ou stack trace, selon config PHP)
+- [ ] **Code HTTP ne sera probablement pas 5xx**, contrairement au comportement attendu
 
-**Note** : Ce comportement est une hypothèse; l'exact dépend de la config PHP sur l'hôte (`display_errors`, gestionnaire d'erreurs personnalisé, etc.).
+**Raison** : `public/index.php` n'a pas de `try/catch` global. Toute exception échappe sans 
+interception ; la réponse dépend de `display_errors` de l'hôte, qui n'est pas dans le dépôt.
+
+**Note de conception** : C'est une **Question ouverte (numéro 4)** du `QUESTIONS_OUVERTES.md` — 
+la robustesse du routeur devrait être améliorée avant l'extension.
+
+### Étape C : Restituer la base
+
+```bash
+mv data/app.db.bak data/app.db
+```
 
 ## 5.2 — Fichier `deployed-version.json` corrompu
+
+**Objectif** : Valider que le routeur gère un fichier JSON invalide sans exposer d'erreur.
 
 ### Étape A : Créer un JSON invalide
 
@@ -534,10 +548,23 @@ curl -s http://127.0.0.1:8080/version | jq .
 ```
 
 **Vérifications** :
-- [ ] Pas d'erreur PHP
-- [ ] Réponse JSON valide (pas le JSON corrompu)
-- [ ] Champs du fichier valent `null` (fallback au tableau vide)
-- [ ] `schemaVersion` lu depuis la base : `1`
+- [ ] Pas d'erreur PHP levée (suppresseur `@` en place)
+- [ ] Réponse JSON valide et cohérente (pas le JSON corrompu)
+- [ ] Champs `sha`, `ref`, `deployedAt` valent `null` (fallback au tableau vide)
+- [ ] `schemaVersion` vaut `1` (lu depuis la base, qui est valide)
+- [ ] Réponse complète :
+  ```json
+  {
+    "sha": null,
+    "ref": null,
+    "deployedAt": null,
+    "schemaVersion": 1
+  }
+  ```
+
+**Raison** : `public/index.php:16-19` utilise `@json_decode()` et l'opérateur `+` pour merger 
+un fallback. C'est une **Question ouverte (numéro 5)** du `QUESTIONS_OUVERTES.md` — la sécurité 
+peut être améliorée (vérifier que `json_decode` retourne bien un array, pas null).
 
 ### Étape C : Nettoyer
 
