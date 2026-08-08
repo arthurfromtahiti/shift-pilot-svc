@@ -64,7 +64,8 @@ Permettre à un opérateur (développeur ou CI) d'appliquer les fichiers SQL de 
     - `$pdo->exec(file_get_contents($f))` — exécute le SQL
     - `INSERT INTO schema_migrations (version, applied_at) VALUES (:v, :t)` avec horodatage UTC (`gmdate('c')`)
     - `$pdo->commit()`
-    - En cas de `Throwable` : `$pdo->rollBack()` + messages sur `STDERR` + `exit(1)` → **la migration courante est rollbackée ; les migrations déjà commitées lors des itérations précédentes restent persistées**. Le message STDERR `"la base est inchangée"` (`bin/migrate.php:73`) est trompeur : il ne tient pas compte des migrations déjà commitées lors des itérations précédentes de la même exécution.
+    - En cas de `Throwable` : `$pdo->rollBack()` + messages sur `STDERR` + `exit(1)` → **la migration courante est rollbackée ; les migrations déjà commitées lors des itérations précédentes restent persistées**. 
+    - ⚠️ **Mise en garde sur le message d'erreur** : Le message STDERR affiché (`bin/migrate.php:73`) dit « la base est inchangée ; sauvegarde disponible ». Ce message est **trompeur lorsque plusieurs migrations sont en attente** : si les migrations 2 et 3 sont à appliquer et que la migration 2 échoue, la migration 1 s'est bien appliquée pendant les itérations précédentes — elle reste persistée. Le message devrait lire « _la migration courante est annulée ; les migrations précédentes de cette exécution restent appliquées_ ». Cet énoncé correctif s'ajoute à la documentation par souci de clarté ; le code du script demeure tel quel.
 
 12. **Confirmation** : affiche `"version de schéma finale : N"` via `Db::schemaVersion($pdo)` relu en base (`bin/migrate.php:77`).
 
@@ -101,7 +102,7 @@ Permettre à un opérateur (développeur ou CI) d'appliquer les fichiers SQL de 
 
 - **`data/app.db` modifié par CI mais non commité** : `deploy.yml` applique les migrations contre `data/app.db` dans le workspace de l'exécuteur, mais ne commite pas la base modifiée sur `main`/`staging`. Si un développeur ajoute un fichier `002_*.sql` sans mettre à jour manuellement `data/app.db`, la base versionnée sera en retard par rapport au schéma appliqué lors du déploiement. Le prochain checkout aura une `data/app.db` à l'ancien schéma.
 
-- **Nom de sauvegarde = version cible, pas version finale réelle** : si `$aFaire` contient les versions 2 et 3 et que la migration 2 échoue, le fichier de sauvegarde s'appelle `avant-v3.db` bien qu'aucune migration n'ait abouti (`bin/migrate.php:55`). Le nom peut être trompeur lors d'une restauration.
+- **Nom de sauvegarde = version cible, pas version finale réelle** : si `$aFaire` contient les versions 2 et 3 et que la migration 2 échoue, le fichier de sauvegarde s'appelle `avant-v3.db` bien que la base ait seulement reçu la migration 1 puis partiel de la migration 2 (rollbackée). Le nom peut être trompeur lors d'une restauration — il indique la version cible **prévue**, non celle réellement appliquée avant l'erreur.
 
 - **`--dry-run` ne valide pas la syntaxe SQL** : `file_get_contents($f)` est affiché, pas exécuté. Une erreur SQL dans un fichier de migration passerait le dry-run de CI et échouerait seulement à l'application réelle (en déploiement).
 

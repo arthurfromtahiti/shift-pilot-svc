@@ -10,6 +10,20 @@
 - **Confiance** : haute pour le pipeline CI et la publication sur la branche `deployed` (`deploy.yml` entier vérifié) — déploiement effectivement servi sur l'hôte : **INCONNU** (hors dépôt)
 - **Justification** : `.github/workflows/deploy.yml` lu intégralement. README (sections « Les deux canaux », « Version servie ») lu. Branche `origin/deployed` inspectée (deux fichiers `production/version.json` et `staging/version.json`, tous deux à `schemaVersion: 1` — `VÉRIFIÉ_CODE` dans la carte des domaines). Commit `da34e1e` référencé (correction du bug d'écrasement inter-environnements). Le déploiement effectif sur l'hôte servi (alimentation de `deployed-version.json`) est hors dépôt et ne peut être prouvé par ce seul dépôt.
 
+## ⚠️ Distinction critique : CI vs Déploiement
+
+**Deux workflows GitHub Actions distincts orchestrent le pipeline — ne pas les confondre** :
+
+| Aspect | `ci.yml` (CI) | `deploy.yml` (Déploiement) |
+|--------|---------------|-------------------------|
+| **Déclencheur** | Chaque `push` sur `main`/`staging` + chaque PR | Chaque `push` sur `main`/`staging` seulement |
+| **Étapes** | 1. Essai à blanc des migrations 2. Tests PHPUnit | 1. Tests PHPUnit 2. Migrations réelles 3. Publier `version.json` |
+| **Effet disque** | Aucun (dry-run seulement) | Modifie `data/app.db` (en CI, éphémère) ; publie sur branche `deployed` |
+| **Sortie artefact** | Logs console uniquement | Fichier `deployed/<env>/version.json` persisté sur branche `deployed` |
+| **Rôle** | Vérification précoce — donne un signal sur la santé des migrations | Publication de la version vérifiée en tant que source de vérité |
+
+**Conséquence** : Un développeur qui pousse sur une PR (déclenche `ci.yml`) voit le résultat du dry-run et des tests mais **aucune publication ne se fait** — le workflow ne produit aucun artefact de déploiement. Seuls les pushes réels sur les branches (déclenche `deploy.yml`) produisent une version publiée. Cela protège contre les « déploiements accidentels » d'une branche de feature testée.
+
 ## Objectif
 Publier, après chaque push sur `main` ou `staging` et uniquement si la suite de tests passe, un fichier `version.json` sur la branche `deployed`. Ce fichier est la **source de vérité de la version publiée sur la branche `deployed`** : il porte le SHA déployé, l'environnement, la version de schéma appliquée et l'horodatage. Le mécanisme qui dépose ensuite ce fichier sur l'hôte servi est **hors dépôt** — seule la branche `deployed` est prouvée par ce workflow. Si le workflow échoue (tests rouges, migration échoue, push rejeté), le fichier reste celui du déploiement précédent — un merge ne produit donc **pas** automatiquement une nouvelle version sur la branche `deployed`.
 
@@ -33,7 +47,7 @@ Publier, après chaque push sur `main` ou `staging` et uniquement si la suite de
 
 3. **Checkout & setup** : `actions/checkout@v4` + `shivammathur/setup-php@v2` (PHP 8.1, extensions `pdo`, `pdo_sqlite`) + `composer install --no-interaction --prefer-dist` (`deploy.yml:23-29`).
 
-4. **Tests avant publication** : `composer test` (PHPUnit) (`deploy.yml:31-32`). Si les tests échouent, **le workflow s'arrête** : aucune migration n'est appliquée, aucun `version.json` n'est mis à jour. La version sur la branche `deployed` reste inchangée — comportement intentionnel documenté dans le README et le commentaire du workflow. Que l'hôte servi reste inchangé est possible mais hors dépôt (dépend du mécanisme de dépôt non visible).
+4. **Tests avant publication** : `composer test` (PHPUnit) (`deploy.yml:31-32`). ⚠️ Même suite de tests que celle exécutée dans `ci.yml`, **mais cette fois-ci sur un push réel** (pas une PR) — les tests ici ont un poids : ils commandent la publication. Si les tests échouent, **le workflow s'arrête** : aucune migration n'est appliquée, aucun `version.json` n'est mis à jour. La version sur la branche `deployed` reste inchangée — comportement intentionnel documenté dans le README et le commentaire du workflow. Que l'hôte servi reste inchangé est possible mais hors dépôt (dépend du mécanisme de dépôt non visible).
 
 5. **Application des migrations** : `php bin/migrate.php` (sans `--dry-run`) (`deploy.yml:34-36`). S'exécute contre `data/app.db` dans le workspace du runner. La sauvegarde est créée dans `data/backups/` (éphémère — non commitée). En cas d'échec, le workflow s'arrête et la version sur la branche `deployed` reste inchangée (le push n'ayant pas eu lieu).
 
@@ -82,7 +96,10 @@ Publier, après chaque push sur `main` ou `staging` et uniquement si la suite de
 
 ## Risques
 
-- **`deployed-version.json` absent de la branche de code** : `public/index.php` lit `deployed-version.json` à la racine du projet servi. Ce fichier n'est **pas versionné** dans `main`/`staging` et n'est **pas produit par `deploy.yml`** — le workflow écrit sur la branche `deployed`, pas sur la racine du projet servi. Le mécanisme qui dépose ce fichier sur l'hôte n'est pas dans le dépôt. Si ce mécanisme est absent ou défaillant, `/version` renvoie des champs `sha`/`ref`/`deployedAt` à `null` silencieusement. (`public/index.php:16-19`, `deploy.yml` — absence confirmée par lecture complète.)
+- **`deployed-version.json` absent ou invalide sur l'hôte servi** : Ce workflow publie `deployed/<env>/version.json` sur la branche `deployed`, mais aucune étape ne copie ce fichier à la racine du projet servi (où `public/index.php` le lit en tant que `deployed-version.json`). Le mécanisme de dépôt n'est pas dans ce dépôt. Conséquences :
+  - Si absent : `/version` retourne `{"sha": null, "ref": null, "environnement": null, "schemaVersion": <N>, "deployedAt": null}`. Les champs nulls indiquent un problème de dépôt du fichier, pas une absence de déploiement du code.
+  - Si présent mais JSON invalide : le comportement de `json_decode` est détérioré, réponse non garantie.
+  - Ces deux scénarios ne sont pas décelables dans les logs de `deploy.yml` — aucune vérification post-push du contenu de `deployed-version.json` n'existe. (`public/index.php:16-19` lit silencieusement ; `deploy.yml` ne valide pas le dépôt.)
 
 - **`data/app.db` non commité après migration en CI** : `deploy.yml` applique les migrations contre la base versionnée dans le workspace, mais ne commite pas le résultat. À la deuxième migration, la base versionnée serait en retard d'une version par rapport au schéma appliqué en CI. Dans l'état actuel (une seule migration, base déjà à v1), ce décalage ne se produit pas encore.
 
