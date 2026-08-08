@@ -1,6 +1,6 @@
 # Fonctionnel — Audit
 
-> Confiance : high
+> Confiance : medium — les chemins de code (routage, appels de méthode, types) sont vérifiables par lecture statique ; les effets HTTP runtime (codes de réponse effectifs, comportement sous panne SQLite) ne sont pas observables sans exécution ; le mécanisme de dépôt de `deployed-version.json` sur l'hôte servi est `INCONNU`.
 
 ## Compréhension globale
 
@@ -8,11 +8,11 @@ shift-pilot-svc expose quatre endpoints HTTP en lecture seule, appuyés sur une 
 
 ## Résumé exécutif
 
-Les quatre endpoints sont implémentés, cohérents avec la carte des domaines et les workflows, et correctement répondants aux cas d'erreur standard (404 sur commande absente, 404 sur route inconnue). La seule incomplétude fonctionnelle notable est le chaînon `deployed-version.json` : `deploy.yml` publie sur la branche `deployed` mais ne dépose pas ce fichier à la racine du projet servi, rendant `/version` silencieusement incomplet (`sha: null, ref: null, deployedAt: null`) si le mécanisme d'hébergement ne l'y dépose pas. Ce trou est documenté mais non résolu. Un second point fonctionnel à surveiller est la subtilité de l'opérateur `+` sur `/version` : si `deployed-version.json` contient un `schemaVersion` obsolète, la valeur retournée par l'API peut ne pas refléter l'état réel de la base. Pour le reste, la cohérence est bonne.
+Les quatre endpoints sont implémentés, cohérents avec la carte des domaines et les workflows, et correctement répondants aux cas d'erreur standard (404 sur commande absente, 404 sur route inconnue). L'unique point fonctionnel conditionnel est le mécanisme de dépôt de `deployed-version.json` : `deploy.yml` (VÉRIFIÉ_CODE) écrit `deployed/<env>/version.json` mais n'écrit pas ce fichier à la racine du projet servi ; `public/index.php:16-19` (VÉRIFIÉ_CODE) lit `deployed-version.json` à cette racine. Si aucun mécanisme externe (hébergement, webhook) ne comble cet écart de chemin, `/version` retournerait `sha: null, ref: null, deployedAt: null` — HYPOTHÈSE conditionnelle, non vérifiable dans ce dépôt (hôte : INCONNU). Un second point à surveiller est la subtilité de l'opérateur `+` sur `/version` : si `deployed-version.json` contient un `schemaVersion` obsolète, la valeur retournée par l'API peut ne pas refléter l'état réel de la base. Pour le reste, la cohérence est bonne.
 
 ## Constats détaillés
 
-**VÉRIFIÉ_CODE — `GET /health` : fonctionnel mais dépendant de SQLite.** `public/index.php:22-24` retourne `{"status":"ok"}` après avoir ouvert la connexion PDO à `public/index.php:11`. La connexion précède le routage — si SQLite est inaccessible, `/health` répondra HTTP 500 au lieu de `{"status":"ok"}`. Fonctionnellement, cela signifie que la sonde de santé teste implicitement la disponibilité de la base. Ce comportement n'est pas documenté comme tel dans le README. Pour un monitoring qui s'attend à une réponse rapide même quand la base est lente, c'est une source de faux positifs d'indisponibilité.
+**VÉRIFIÉ_CODE (chemin) + HYPOTHÈSE (effet) + INCONNU (hôte) — `GET /health` : fonctionnel mais dépendant de SQLite.** `public/index.php:11` ouvre la connexion PDO avant tout routage (VÉRIFIÉ_CODE). `public/index.php:22-24` retourne `{"status":"ok"}` si l'exécution atteint ce point (VÉRIFIÉ_CODE). Aucun `try/catch` n'encadre la connexion (VÉRIFIÉ_CODE). HYPOTHÈSE : si SQLite est inaccessible, une `PDOException` non attrapée s'échapperait, et la réponse serait probablement HTTP 500 — mais le code de réponse effectif dépend de la configuration PHP sur l'hôte (`display_errors`, gestionnaire d'erreurs), qui est INCONNU dans ce dépôt. Fonctionnellement, la sonde teste implicitement la disponibilité de la base. Ce comportement n'est pas documenté comme tel dans le README.
 
 **VÉRIFIÉ_CODE — `GET /version` : fonctionnel avec un comportement de priorité non trivial.** `public/index.php:27` retourne `$version + ['schemaVersion' => Db::schemaVersion($pdo)]`. L'opérateur `+` PHP conserve la valeur du tableau gauche si la clé existe déjà. `deploy.yml:46` écrit `schemaVersion` dans `deployed-version.json` lors de chaque déploiement — donc en production, c'est la valeur du fichier qui est retournée, pas la base live. Ce comportement est intentionnel (la version servie fait foi) mais peut induire une divergence silencieuse si la base est modifiée hors déploiement. Si `deployed-version.json` est absent, les champs `sha`, `ref`, `deployedAt` valent `null` et `schemaVersion` est lue depuis la base — comportement gracieux, mais non alertant.
 
@@ -20,7 +20,7 @@ Les quatre endpoints sont implémentés, cohérents avec la carte des domaines e
 
 **VÉRIFIÉ_CODE — `GET /orders/{id}` : fonctionnel avec 404 correct.** `public/index.php:35-43` + `src/Orders.php:18-24`. La regex `#^/orders/(\d+)$#` filtre les identifiants non entiers (→ 404 Route inconnue, pas 404 Commande introuvable). `Orders::find()` retourne `null` sur `fetch() === false` et le routeur émet `http_response_code(404)` + `{"error":"Commande introuvable"}`. Test : `testTrouveUneCommandeParIdentifiant` et `testIdentifiantInconnuRenvoieNull` (`tests/OrdersTest.php:29-37`).
 
-**VÉRIFIÉ_CODE — Chaînon `deployed-version.json` absent du dépôt.** C'est le trou fonctionnel le plus significatif du service. `public/index.php:16-19` lit `deployed-version.json` à la racine du projet servi. Ce fichier n'est pas versionné dans `main`/`staging`, et `deploy.yml` ne le dépose jamais dans le workspace servi — il publie sur la branche `deployed`. Le mécanisme qui relie `deployed/<env>/version.json` à `deployed-version.json` à la racine n'est pas dans le dépôt. Conséquence fonctionnelle observable : `/version` retourne `sha: null, ref: null, deployedAt: null` si ce mécanisme est absent ou défaillant, sans erreur HTTP explicite. Le service répond correctement mais la fonctionnalité centrale (observer la version réellement servie) est silencieusement vide.
+**VÉRIFIÉ_CODE (écart de chemin) + INCONNU (hôte) — Mécanisme de dépôt de `deployed-version.json`.** `public/index.php:16-19` (VÉRIFIÉ_CODE) lit `deployed-version.json` à la racine du projet servi. `deploy.yml` (VÉRIFIÉ_CODE) écrit dans `deployed/<env>/version.json` sur la branche `deployed` — pas à la racine du projet servi. L'écart entre ces deux chemins est un fait de code. En revanche, l'existence ou l'absence d'un mécanisme externe (hébergement, script de déploiement, webhook) qui copierait ce fichier à la racine est INCONNU : aucun artefact dans ce dépôt ne le décrit, mais cela ne prouve pas son absence. HYPOTHÈSE conditionnelle : si ce mécanisme est absent, `/version` retournerait `sha: null, ref: null, deployedAt: null` sans erreur HTTP. La sévérité effective dépend de l'environnement d'hébergement (INCONNU).
 
 **VÉRIFIÉ_CODE — Méthodes HTTP non filtrées : comportement défini mais non documenté.** `$_SERVER['REQUEST_METHOD']` n'est jamais consulté (`public/index.php:1-47`). `POST /orders` et `DELETE /health` reçoivent les mêmes réponses que leurs équivalents GET. Pour un service en lecture seule avec données fictives, aucune conséquence pratique. Le workflow SERVICE documente ce point comme risque mineur (`WORKFLOW_SERVICE.md:94`).
 
@@ -45,18 +45,18 @@ Les quatre endpoints sont implémentés, cohérents avec la carte des domaines e
 
 ## Zones critiques
 
-- **`/version` avec `deployed-version.json` absent** : la fonctionnalité principale du banc d'essai (observer la version servie) est silencieusement vide — pas d'erreur HTTP, pas d'alerte, simplement des champs `null`.
-- **`/health` sous panne SQLite** : sonde indisponible exactement quand elle est la plus utile.
+- **`/version` si le mécanisme de dépôt de `deployed-version.json` est absent de l'hôte** (INCONNU) : HYPOTHÈSE — la fonctionnalité principale du banc d'essai retournerait des champs `null` sans erreur HTTP ni alerte. Sévérité conditionelle à la configuration d'hébergement.
+- **`/health` sous panne SQLite** (HYPOTHÈSE + hôte INCONNU) : si la connexion PDO échoue avant le routage, la sonde pourrait être indisponible précisément quand elle est la plus utile — mais l'effet exact dépend de la configuration PHP sur l'hôte.
 
 ## Risques
 
-- **Version servie invisible** : si `deployed-version.json` n'est pas déposé à la racine du projet servi, `/version` retourne des champs nuls. Un agent ou un humain qui s'appuie sur `/version` pour confirmer un déploiement penserait que rien n'a été déployé, alors que la branche `deployed` est à jour. (`public/index.php:16-19`)
-- **`schemaVersion` désynchronisée** : la valeur du fichier prime sur la base live — si la base est modifiée hors déploiement (migration manuelle, restauration), `/version` indique une version de schéma obsolète sans alerte. (`public/index.php:27`)
-- **Fausse disponibilité de `/health`** : un monitoring qui compte sur `/health` pour distinguer « service down » de « base down » ne peut pas faire cette distinction avec l'implémentation actuelle. (`public/index.php:11`)
+- **Version servie potentiellement invisible** (HYPOTHÈSE — hôte INCONNU) : si `deployed-version.json` n'est pas déposé à la racine du projet servi par un mécanisme externe, `/version` retournerait des champs nuls. Un agent ou un humain s'appuyant sur `/version` pour confirmer un déploiement penserait que rien n'a été déployé alors que la branche `deployed` est à jour. La réalité dépend de l'environnement d'hébergement. (`public/index.php:16-19`)
+- **`schemaVersion` désynchronisée** (VÉRIFIÉ_CODE chemin, HYPOTHÈSE effet) : la valeur du fichier prime sur la base live (`opérateur +`, `public/index.php:27`) — si la base est modifiée hors déploiement, `/version` indiquerait une version de schéma obsolète sans alerte. Possible mais conditionnel à une modification hors cycle.
+- **Disponibilité de `/health` sous panne SQLite** (HYPOTHÈSE + hôte INCONNU) : un monitoring qui compte sur `/health` pour distinguer « service down » de « base down » ne pourrait probablement pas faire cette distinction — mais l'effet exact (HTTP 500, réponse vide, etc.) dépend de la configuration PHP sur l'hôte. (`public/index.php:11`)
 
 ## Recommandations priorisées
 
-1. **Documenter et résoudre le mécanisme de dépôt de `deployed-version.json`** — identifier, versionner ou documenter le script/webhook qui dépose ce fichier à la racine du projet servi. Sans ce maillon, la fonctionnalité centrale du banc d'essai est incomplète.
+1. **Clarifier le mécanisme de dépôt de `deployed-version.json`** — identifier si un mécanisme externe (hébergement, webhook, script) copie ce fichier à la racine du projet servi, et si oui le versionner ou le documenter ; si non, le créer. Sans ce maillon (dont l'existence est INCONNU hors de ce dépôt), la fonctionnalité centrale du banc d'essai serait silencieusement incomplète.
 2. **Documenter le comportement de `/health`** — clarifier dans le README si la sonde de santé est conçue pour dépendre de SQLite, et si oui, le documenter comme « deep health check ».
 3. **Ajouter un commentaire sur l'opérateur `+` dans `public/index.php:27`** — expliquer pourquoi le fichier a la priorité sur la base pour `schemaVersion`.
 

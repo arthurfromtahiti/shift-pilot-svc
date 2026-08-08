@@ -39,7 +39,7 @@ La posture de sécurité est saine pour un banc d'essai. Les requêtes SQL sont 
 - Zéro secret dans le dépôt, données fictives uniquement (README, `migrations/001_init.sql`).
 - `PDO::ERRMODE_EXCEPTION` + `FETCH_ASSOC` : comportement prévisible, pas de fetch par indice silencieux (`src/Db.php:18-19`).
 - `foreign_keys = ON` : intégrité référentielle active à chaque connexion (`src/Db.php:20`).
-- Aucune dépendance tierce en production : surface d'attaque liée aux dépendances déclarées = zéro (`composer.json:4`).
+- Aucune dépendance tierce de production déclarée dans `composer.json:4` — la surface d'attaque liée aux dépendances déclarées est nulle dans le périmètre de ce dépôt ; la configuration PHP, les extensions activées et l'hôte servi (INCONNU) ne sont pas couverts par ce constat.
 
 ## Dettes techniques
 
