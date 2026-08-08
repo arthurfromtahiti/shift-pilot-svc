@@ -124,7 +124,7 @@ via `setUp()`. Même si le fichier versionnéest corrompu, les tests peuvent ré
    git push origin <ma-branche>
    ```
 
-### En CI (après merge)
+### En CI (push et pull request)
 
 - `.github/workflows/ci.yml:17-18` — essai à blanc automatique sur chaque push et PR.
 - `.github/workflows/deploy.yml:35-36` — application réelle après les tests, sur `staging` ou `main`.

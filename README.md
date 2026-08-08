@@ -10,7 +10,7 @@ statiques, sans persistance ni environnement en ligne.
 | | |
 |---|---|
 | **Persistance** | SQLite, fichier `data/app.db` **versionné**. Les migrations modifient donc de vraies données, et une sauvegarde est un vrai fichier. |
-| **Version servie** | Publiée par le déploiement sur la branche `deployed`, jamais déduite du code. C'est elle qui fait foi. |
+| **Version publiée** | Publiée par le déploiement sur la branche `deployed`, jamais déduite du code. Source de vérité en Git — voir aussi « Version servie » ci-dessous. |
 | **Canal de déploiement** | `staging` et `main`, chacun avec son environnement. |
 
 ## Les deux canaux — la distinction est le sujet, pas un détail
@@ -33,8 +33,8 @@ Le déploiement publie un `version.json` sur la branche Git `deployed` :
 - `deployed/production/version.json`
 
 Il porte le SHA du commit déployé, la version de schéma appliquée et l'horodatage UTC.
-**Si un déploiement n'aboutit pas, ce fichier reste celui de la version précédente** — un merge
-n'a alors produit *aucune* nouvelle version servie, et cela doit se voir.
+**Si un déploiement n'aboutit pas, ce fichier reste celui de la version précédente** — aucune 
+nouvelle version n'est publiée en Git, et cela doit se voir.
 
 Vérifiable via `git show origin/deployed:staging/version.json` — **tracé dans l'historique Git, immuable**.
 
