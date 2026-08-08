@@ -2,6 +2,10 @@
 
 | type | domaine | workflow | dépôt | fichier | date | version SHA | niveau de preuve | titre |
 |---|---|---|---|---|---|---|---|---|
+| référence | tous | — | shift-pilot-svc | PROJECT_CONTEXT.md | 2026-08-08 | 17ae996ea128bea1876cacb5f08d4c76f1fc6e46 | high | Résumé exécutif — nature, domaines clés, points d'attention, deux canaux, persistance |
+| référence | tous | — | shift-pilot-svc | CDC_FONCTIONNEL.md | 2026-08-08 | 17ae996ea128bea1876cacb5f08d4c76f1fc6e46 | high | Cahier des charges fonctionnel — acteurs, règles métier testables, migrations, déploiement |
+| référence | tous | — | shift-pilot-svc | CARTOGRAPHIE_CODE.md | 2026-08-08 | 17ae996ea128bea1876cacb5f08d4c76f1fc6e46 | high | Cartographie technique — structure physique, points d'entrée, dépendances |
+| référence | tous | — | shift-pilot-svc | CAHIER_RECETTE.md | 2026-08-08 | 17ae996ea128bea1876cacb5f08d4c76f1fc6e46 | high | Plan de recette — six phases, isolation des opérations destructrices, prérequis production |
 | domaine | tous | — | shift-pilot-svc | domaines/CARTE_DES_DOMAINES.md | 2026-08-08 | 17ae996ea128bea1876cacb5f08d4c76f1fc6e46 | contient une hypothèse | Carte des domaines — six domaines du micro-service PHP (commandes, api-http, persistance, migrations, déploiement, ci-tests) |
 | workflow | deploiement | DEPLOIEMENT | shift-pilot-svc | workflows/WORKFLOW_DEPLOIEMENT.md | 2026-08-08 | 17ae996ea128bea1876cacb5f08d4c76f1fc6e46 | contient une hypothèse | Publication de la version servie sur la branche `deployed` — pipeline CI/CD GitHub Actions, deux canaux staging/production |
 | workflow | migrations | MIGRATION | shift-pilot-svc | workflows/WORKFLOW_MIGRATION.md | 2026-08-08 | 17ae996ea128bea1876cacb5f08d4c76f1fc6e46 | contient une hypothèse | Application des migrations de schéma SQLite — dry-run, sauvegarde obligatoire, application transactionnelle |
