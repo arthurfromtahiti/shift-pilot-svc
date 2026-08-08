@@ -12,7 +12,7 @@ shift-pilot-svc/
 │   └── index.php              # Routeur HTTP, endpoints /health, /version, /orders, /orders/{id}
 ├── src/
 │   ├── Db.php                 # Connexion PDO SQLite, chemin de base, lecture schemaVersion
-│   └── Server.php             # Logique métier Orders (getAll, getById)
+│   └── Orders.php             # Logique métier Orders (all(), find(), count())
 ├── bin/
 │   └── migrate.php            # CLI de migration : dry-run, application transactionnelle, sauvegarde
 ├── migrations/
@@ -41,32 +41,36 @@ shift-pilot-svc/
 
 **Endpoints exposés** :
 - `GET /health` → `{"status": "ok"}` (hardcodé)
-- `GET /version` → Lit `deployed-version.json` à la racine, retourne ses champs (sha, ref, environnement, schemaVersion, deployedAt)
-- `GET /orders` → `Orders::getAll()` — tableau JSON de toutes les commandes
-- `GET /orders/{id}` → `Orders::getById($id)` — commande par ID ou `null` si absent
+- `GET /version` → Lit `deployed-version.json` à la racine, fusionne avec `schemaVersion` lu en base, retourne ses champs (sha, ref, deployedAt, schemaVersion). Si fichier absent, retourne `null` pour sha/ref/deployedAt
+- `GET /orders` → `Orders::all()` — tableau JSON de toutes les commandes
+- `GET /orders/{id}` → `Orders::find($id)` — commande par ID (statut 200 + JSON) ou 404 + `{"error": "Commande introuvable"}` si absent
 
 **Logique de routage** : 
 - Extraction de `$path` depuis `REQUEST_URI`
 - Cas `/health` → sortie immédiate avec statut 200
-- Cas `/version` → lecture fichier JSON `deployed-version.json`, décodage, sortie
-- Cas `/orders` → distinction par présence de `$id` et valeur ; `/orders/1` → ID=1 ; `/orders/schemaVersion` non traité (passé à Orders::getById qui retourne null)
+- Cas `/version` → lecture fichier JSON `deployed-version.json`, fusion avec `Db::schemaVersion()`, sortie
+- Cas `/orders` → `Orders::all()` sans filtrage
+- Cas `/orders/{id}` → extraction d'ID par regex `/^\/orders\/(\d+)$/`, passage à `Orders::find($id)` ; si `null` retourné, statut 404 + erreur JSON
 
-**Risques notés** : 
-- Pas de validation de contenu du fichier `deployed-version.json`
-- Pas de gestion d'erreur si le fichier est absent (retourne `null` silencieusement)
-- Route `/orders/schemaVersion` n'est jamais prise (test `$id !== 'schemaVersion'` écarte ce cas)
+**Résumé du comportement** : 
+- Pas de validation de contenu du fichier `deployed-version.json` — il est simplement décodé
+- Si le fichier est absent, `is_file()` retourne faux et `/version` retourne les champs `sha`, `ref`, `deployedAt` à `null`
+- `/orders/{id}` absent : retourne 404 + `{"error": "Commande introuvable"}`
 
 ---
 
-### 2. Logique métier — `src/Server.php`
+### 2. Logique métier — `src/Orders.php`
 
 **Rôle** : Classe Orders, exécution des requêtes SQL sur la base.
 
-**Classe principale** : `Orders`
+**Classe principale** : `App\Orders`
 
 **Méthodes publiques** :
-- `Orders::getAll()` → `SELECT * FROM orders` → tableau JSON
-- `Orders::getById($id)` → `SELECT * FROM orders WHERE id = ?` (PDO prepared statement) → objet JSON ou null
+- `all()` → `SELECT id, client, montant_cents, devise, statut FROM orders ORDER BY id` → tableau JSON de 5 commandes
+- `find($id)` → `SELECT ... WHERE id = :id` (PDO prepared statement) → objet JSON ou null si absent
+- `count()` → Retourne le nombre de commandes
+
+**Champs retournés** : `id` (INTEGER), `client` (TEXT), `montant_cents` (INTEGER), `devise` (TEXT), `statut` (TEXT)
 
 **Connexion à la base** : Utilise `Db::connect()` (voir ci-dessous).
 
@@ -169,7 +173,7 @@ github.push sur staging/main
 | Fichier | Rôle | Risque | Mitigation |
 |---------|------|--------|-----------|
 | `public/index.php` | Routeur | Pas de validation /version | Fichier produit par CI/CD, pas d'accès direct |
-| `src/Server.php` | Logique Orders | Injection SQL ? | PDO prepared statements (paramètres ?) |
+| `src/Orders.php` | Logique métier | Injection SQL ? | PDO prepared statements (`:id` bound) |
 | `src/Db.php` | Connexion | Chemin override `SVC_DB_PATH` | Variable d'environnement contrôlée par script |
 | `bin/migrate.php` | Migration | Exécution destructrice | Sauvegarde obligatoire, dry-run en CI |
 | `data/app.db` | Persistance | Corruption lors copie ? | Vérification intégrité post-backup recommandée |
@@ -180,19 +184,21 @@ github.push sur staging/main
 
 ## Tests — couverture et lacunes
 
-**Tests présents** (`tests/OrdersTest.php`) :
-- `testGetAll()` — retour tableau JSON de 5 commandes
-- `testGetById()` — retour commande par ID
-- Format JSON — champs `id`, `email`, `amount`, `created_at`, `updated_at`
+**Tests présents** (`tests/OrdersTest.php`, 5 tests) :
+- `testListeToutesLesCommandes()` — retour tableau de 5 commandes
+- `testTrouveUneCommandeParIdentifiant()` — retour commande par ID (ID 3 = Manoa)
+- `testIdentifiantInconnuRenvoieNull()` — retour null si ID absent
+- `testMontantsStockesEnCentimesEntiers()` — vérification montants en entiers positifs
+- `testVersionDeSchemaLueEnBase()` — lecture version schema (0 avant migration)
+
+**Champs testés** : `id`, `client`, `montant_cents`, `devise`, `statut`
 
 **Tests absents** :
-- Routeur (`public/index.php`) — endpoints `/health`, `/version`, gestion routing
+- Routeur (`public/index.php`) — endpoints `/health`, `/version`, codes HTTP 404 du routing
 - Migrateur (`bin/migrate.php`) — essai à blanc, sauvegarde, transactions, rollback
-- Erreurs HTTP (404, 500)
-- Cas null en JSON (ID absent)
 - Endpoints `/health` et `/version` ne sont pas testés
 
-**Couverture estimée** : ~40% du code (couche métier seule, pas infrastructe).
+**Couverture estimée** : ~50% du code (couche Orders couverte, routes/routeur/migrations non testées).
 
 ---
 

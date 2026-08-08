@@ -36,18 +36,18 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 
 #### Règle 1.1 : Endpoint `/orders` retourne toutes les commandes
 - **Énoncé** : Un appel `GET /orders` retourne le tableau JSON de toutes les commandes présentes en base.
-- **Données** : Au démarrage, 5 commandes fictives (`001_init.sql`).
+- **Données** : Au démarrage, 5 commandes fictives (`001_init.sql`) avec champs `id`, `client`, `montant_cents`, `devise`, `statut`.
 - **Règle métier** : Les commandes ne peuvent pas être éditées ni supprimées via l'API — ensemble immuable une fois déployé.
-- **Preuve** : `src/Server.php:42-48`, méthode `Orders::getAll()` exécute `SELECT * FROM orders` ; `tests/OrdersTest.php::testGetAll()` vérifie le nombre et les champs.
+- **Preuve** : `src/Orders.php:13-16`, méthode `all()` exécute `SELECT id, client, montant_cents, devise, statut FROM orders` ; `tests/OrdersTest.php::testListeToutesLesCommandes()` vérifie le nombre et les types.
 
 #### Règle 1.2 : Endpoint `/orders/{id}` retourne une commande par ID
-- **Énoncé** : Un appel `GET /orders/1` retourne un objet JSON avec les champs de la commande ID 1.
-- **Comportement absent** : Si l'ID n'existe pas, le statut HTTP reste 200 mais le corps est `null` (pas 404).
-- **Preuve** : `src/Server.php:49-53`, condition `if ($id && $id !== 'schemaVersion')` + `Orders::getById($id)` ; test `OrdersTest.php::testGetById()`.
+- **Énoncé** : Un appel `GET /orders/1` retourne un objet JSON avec les champs `id`, `client`, `montant_cents`, `devise`, `statut`.
+- **Comportement absent** : Si l'ID n'existe pas, le statut HTTP est 404 et le corps est `{"error": "Commande introuvable"}`.
+- **Preuve** : `src/Orders.php:18-24`, méthode `find($id)` retourne `null` si absent ; `public/index.php:34-44` traduit `null` en réponse 404 + JSON d'erreur ; test `OrdersTest.php::testIdentifiantInconnuRenvoieNull()`.
 
 #### Règle 1.3 : Tous les appels à `/orders` et `/orders/{id}` retournent du JSON valide avec le schéma défini
-- **Énoncé** : Chaque commande JSON porte les champs `id`, `email`, `amount`, `created_at`, `updated_at`, tous obligatoires (aucun null sauf si ID manquant).
-- **Preuve** : Jeu de données `001_init.sql` définit le schéma ; `src/Server.php` structure le JSON via `Orders::getAll()` et `Orders::getById()` ; test `OrdersTest.php::testResponseFormat()`.
+- **Énoncé** : Chaque commande JSON porte les champs `id` (INTEGER), `client` (TEXT), `montant_cents` (INTEGER), `devise` (TEXT, défaut 'XPF'), `statut` (TEXT). Tous obligatoires, jamais null pour des commandes existantes.
+- **Preuve** : Jeu de données `001_init.sql` définit le schéma et 5 lignes d'exemple ; `src/Orders.php:15,20` structure les SELECT ; tests `OrdersTest.php::testMontantsStockesEnCentimesEntiers()` et `testTrouveUneCommandeParIdentifiant()` vérifient les champs.
 
 ---
 
@@ -143,15 +143,15 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 
 **Champs** :
 - `id` (INTEGER PRIMARY KEY)
-- `email` (TEXT)
-- `amount` (REAL)
-- `created_at` (TEXT ISO 8601)
-- `updated_at` (TEXT ISO 8601)
+- `client` (TEXT NOT NULL)
+- `montant_cents` (INTEGER NOT NULL, en centimes, devises locales)
+- `devise` (TEXT NOT NULL, défaut 'XPF')
+- `statut` (TEXT NOT NULL, valeurs ex: 'payee', 'annulee')
 
 **État et cycle de vie** :
-- État initial : 5 commandes fictives insérées par `001_init.sql` (données de test fixes).
+- État initial : 5 commandes fictives insérées par `001_init.sql` au démarrage (Heiata, Teiki, Manoa, Vaite, Moana).
 - Pas de suppression, pas de mise à jour, pas d'insertion via l'API — ensemble immuable une fois déployé.
-- **Cycle complet** : Insertion en base (migration) → persistance jusqu'à nouvel ordre → rollback possible (via sauvegarde + restauration manuelle hors API).
+- **Cycle complet** : Insertion en base (migration `001_init.sql`) → persistance jusqu'à nouvel ordre → rollback possible (via sauvegarde + restauration manuelle hors API).
 
 **Absence de contraintes métier**:
 - Pas de contrainte UNIQUE sur `email` (doublons possibles).
@@ -175,8 +175,8 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 - **Implication future** : À clarifier avant la 2e migration pour éviter une divergence entre la base versionnée et le schéma appliqué en production.
 
 ### Couverture de test incomplète
-- **Testés** : Couche Orders (`OrdersTest.php`) — nom, ID, tous les endpoints de lecture.
-- **Non testés** : Routeur (`public/index.php`), migrateur (`bin/migrate.php`), cas d'erreur HTTP (404, 500), valeurs null en JSON, endpoints `/health` et `/version`.
+- **Testés** : Couche Orders (`OrdersTest.php`) — 5 tests couvrant `all()`, `find()` nominal/absent, montants entiers, version schema.
+- **Non testés** : Routeur (`public/index.php`), migrateur (`bin/migrate.php`), endpoints `/health` et `/version`, codes HTTP 404 du routeur (vérifiés sur test endpoint seul, pas par la suite).
 
 ### Absence de `workflow_dispatch`
 - **Observation** : Le workflow `deploy.yml` ne peut être déclenché que par un push. Il n'existe pas de bouton « re-déployer » manuel dans GitHub Actions.

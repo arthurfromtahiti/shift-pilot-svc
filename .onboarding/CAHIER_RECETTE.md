@@ -92,13 +92,13 @@ rm -rf /tmp/shift-pilot-test
   ```bash
   curl http://127.0.0.1:8080/orders | jq .
   ```
-  Vérifier : Tableau de 5 objets, chacun avec `id`, `email`, `amount`, `created_at`, `updated_at`.
+  Vérifier : Tableau de 5 objets (Heiata, Teiki, Manoa, Vaite, Moana), chacun avec `id`, `client`, `montant_cents`, `devise`, `statut`.
 
 - [ ] **1.5** : Tester endpoint `/orders/1`
   ```bash
   curl http://127.0.0.1:8080/orders/1 | jq .
   ```
-  Réponse attendue : Un seul objet JSON (commande ID 1).
+  Réponse attendue : Un seul objet JSON avec `id: 1, client: "Heiata", montant_cents: 420000, devise: "XPF", statut: "payee"`.
 
 - [ ] **1.6** : Arrêter le serveur (Ctrl+C dans le terminal)
 
@@ -236,7 +236,7 @@ rm -rf /tmp/shift-pilot-test
   ```bash
   curl http://127.0.0.1:8080/orders | jq '.[0]'
   ```
-  Vérifier : Tous les champs présents (`id`, `email`, `amount`, `created_at`, `updated_at`).
+  Vérifier : Tous les champs présents (`id`, `client`, `montant_cents`, `devise`, `statut`). Exemple : `id: 1, client: "Heiata", montant_cents: 420000, devise: "XPF", statut: "payee"`.
 
 - [ ] **4.5** : `/orders/1` — commande spécifique
   ```bash
@@ -248,7 +248,7 @@ rm -rf /tmp/shift-pilot-test
   ```bash
   curl http://127.0.0.1:8080/orders/999
   ```
-  Réponse attendue : `null` (comportement défini, pas 404).
+  Réponse attendue : Statut HTTP 404 avec JSON `{"error": "Commande introuvable"}` (comportement défini).
 
 - [ ] **4.7** : Arrêter le serveur (Ctrl+C)
 

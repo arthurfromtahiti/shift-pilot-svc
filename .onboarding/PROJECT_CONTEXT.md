@@ -22,11 +22,11 @@
 
 | Domaine | Responsabilité | Criticité | Point d'entrée |
 |---------|---|---|---|
-| **API HTTP** | Service en lecture seule : quatre endpoints JSON (`/health`, `/version`, `/orders`, `/orders/{id}`) | Haute | `public/index.php:9-33` |
-| **Persistance** | Base SQLite versionnée (`data/app.db`) ; 5 commandes fictives initiales | Moyenne | `src/Db.php` |
+| **API HTTP** | Service en lecture seule : quatre endpoints JSON (`/health`, `/version`, `/orders`, `/orders/{id}`) | Haute | `public/index.php` |
+| **Persistance** | Base SQLite versionnée (`data/app.db`) ; 5 commandes fictives initiales (Heiata, Teiki, Manoa, Vaite, Moana) avec champs `id`, `client`, `montant_cents`, `devise`, `statut` | Moyenne | `src/Db.php`, `src/Orders.php` |
 | **Migrations** | Application atomique de schémas via `bin/migrate.php` ; dry-run obligatoire en CI ; sauvegarde prérequis | Haute | `bin/migrate.php` |
 | **Déploiement** | Publication sur `deployed` après succès CI ; deux environnements isolés (`staging`, `production`) | Haute | `.github/workflows/deploy.yml` |
-| **Tests** | Suite PHPUnit partielle (couche Orders) ; dry-run des migrations en CI | Moyenne | `tests/`, `.github/workflows/ci.yml` |
+| **Tests** | Suite PHPUnit : 5 tests couche Orders (`all()`, `find()` nominal/absent, montants, version) ; dry-run migrations en CI | Moyenne | `tests/OrdersTest.php`, `.github/workflows/ci.yml` |
 
 ## Points d'attention
 
@@ -63,10 +63,10 @@ Champs : `sha`, `ref`, `environnement`, `schemaVersion` (lu en base post-migrati
 ## Données — vue métier
 
 ### Notion : Commande (Order)
-- **État** : présente, modifiée le `updated_at`, créée le `created_at`
-- **Cycle de vie** : création via insertion dans `orders` ; persistée jusqu'à suppression (jamais pratiquée) ou rollback migration
-- **Attributs** : `id` (clé primaire), `email`, `amount`, `created_at`, `updated_at`
-- **Valeur métier** : ensemble de 5 commandes fictives et immuables (jeu de test versionnée)
+- **État** : Présente avec un identifiant, un client, un montant en centimes, une devise, un statut de paiement.
+- **Cycle de vie** : Création via insertion dans `orders` par `001_init.sql` lors de la migration initiale ; persistée jusqu'à suppression (jamais pratiquée) ou rollback migration.
+- **Attributs** : `id` (INTEGER PRIMARY KEY), `client` (TEXT), `montant_cents` (INTEGER, >0), `devise` (TEXT, défaut 'XPF'), `statut` (TEXT, ex: 'payee' ou 'annulee')
+- **Valeur métier** : Ensemble de 5 commandes fictives et immuables : Heiata (420000 XPF payée), Teiki (180000 XPF annulée), Manoa (960000 XPF payée), Vaite (305000 XPF payée), Moana (75000 XPF annulée)
 
 ## Intégrations externes — toutes hors dépôt
 
