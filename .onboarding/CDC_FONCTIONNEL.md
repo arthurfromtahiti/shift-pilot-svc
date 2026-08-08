@@ -66,14 +66,14 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 **Déclencheur** : Push sur `staging` ou `main`  
 **Résultat** : Code exécuté sur le serveur, version enregistrée sur `deployed`
 
-#### Règle 2.1 : Staging et production sont isolés
-- **Énoncé** : Un push sur `staging` ne doit jamais modifier la version servie de `main` (production).
+#### Règle 2.1 : Staging et production sont isolés sur Git
+- **Énoncé** : Un push sur `staging` ne doit jamais modifier `deployed/production/version.json` sur la branche `deployed`. Les deux environnements restent isolés.
 - **Mécanisme** : Deux fichiers de version distincts (`deployed/staging/version.json` et `deployed/production/version.json`) coexistent sur la branche `deployed` sans jamais s'écraser.
 - **Règle de pipeline** : La branche cible du `version.json` est déterminée par `github.ref_name` — une variable immuable du déclencheur Git.
 - **Preuve** : `.github/workflows/deploy.yml:38-41` — expression GitHub Actions `github.ref_name == 'main' && 'production' || 'staging'` ; `mkdir -p "$CIBLE"` isole les répertoires ; commit da34e1e (correction du bug d'écrasement inter-environnements) documenté dans README et carte des domaines.
 
 #### Règle 2.2 : Pas de publication sans suite verte
-- **Énoncé** : Si la suite de tests échoue, aucune nouvelle version n'est publiée sur `deployed` ; la version précédente reste servie.
+- **Énoncé** : Si la suite de tests échoue, aucune nouvelle version n'est publiée sur la branche `deployed` ; la version Git précédente reste inchangée.
 - **Mécanisme** : `composer test` (PHPUnit) s'exécute **avant** les migrations et la publication. Tout `exit` non-zéro arrête le workflow.
 - **Preuve** : `.github/workflows/deploy.yml:31-32` — ordre des étapes ; commentaire « Test avant publication ».
 
@@ -132,27 +132,29 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 
 #### Règle 4.1 : La version servie ne se déduit jamais du code
 - **Énoncé** : La version **vraiment** déployée est celle enregistrée dans `deployed/<env>/version.json` sur la branche `deployed`, jamais supposée depuis le code ou les constantes.
-- **Corollaire** : Le champ `schemaVersion` dans le JSON est lu **en base après migration**, pas supposé depuis le nom du fichier de migration.
+- **Corollaire** : Le champ `schemaVersion` dans le JSON est toujours lu **en base en temps réel** au moment de l'appel, ajouté au tableau du fichier par l'opérateur `+`. Si le fichier contient déjà `schemaVersion`, la valeur du fichier **prime** (opérateur `+` en PHP préserve les clés de l'opérande gauche).
 - **Contrat du endpoint `/version` — trois cas mutuellement exclusifs** :
   - **Cas 1 — Fichier `deployed-version.json` absent (local)** : 
     - **Code** : `public/index.php:16-19` fallback vers `['sha' => null, 'ref' => null, 'deployedAt' => null]`
     - **Résultat** : `{"sha": null, "ref": null, "deployedAt": null, "schemaVersion": <N>}` où `<N>` est la version lue en base en temps réel.
     - **Clé `environnement`** : **Absente du JSON** (pas créée par le fallback).
     - **HTTP** : 200 OK (JSON valide produit).
-  - **Cas 2 — Fichier présent et JSON valide** :
-    - **Code** : `public/index.php:17-18` décode le fichier, `json_decode()` retourne un tableau associatif.
-    - **Résultat** : Tous les champs du fichier sont présents (ex: `sha`, `ref`, `environnement`, `deployedAt`), augmentés en ligne 27 par `$version + ['schemaVersion' => <N>]`.
+  - **Cas 2 — Fichier présent et JSON valide, avec ou sans `schemaVersion`** :
+    - **Code** : `public/index.php:17-18` décode le fichier, `json_decode()` retourne un tableau associatif. Ligne 27 fusionne avec `$version + ['schemaVersion' => <N>]` où `<N>` est lue en base.
+    - **Priorité** : L'opérateur `+` de PHP préserve les clés du tableau gauche (`$version`). Si le fichier **contient** déjà `schemaVersion`, la valeur du fichier est conservée ; si absent, la valeur de la base est ajoutée.
+    - **Résultat** : Tous les champs du fichier décodé sont présents (ex: `sha`, `ref`, `environnement`, `deployedAt`), plus `schemaVersion` depuis le fichier **ou** la base selon sa présence dans le fichier.
     - **HTTP** : 200 OK (JSON complètement peuplé).
   - **Cas 3 — Fichier présent mais JSON invalide ou malformé** :
     - **Code** : `public/index.php:18` `json_decode()` retourne `null` (JSON invalide). Ligne 27 exécute `$version + [...]` où `$version` est `null`.
     - **Erreur** : PHP lève une `TypeError` : « Unsupported operand type(s) for +: null and array » (opérateur `+` non défini pour null).
     - **Résultat** : Aucun JSON d'erreur structuré. Réponse HTTP 500 sans corps, ou body = stack PHP brut (dépend de `display_errors` en production).
     - **Implication métier** : Erreur grave — indique un fichier `deployed-version.json` corrompu sur le serveur de déploiement.
-- **Gestion des erreurs globales** : Le routeur `public/index.php:11-47` n'enveloppe pas `Db::connect()` (ligne 11) ni les appels Orders/Db dans un bloc `try/catch` global. Toute exception PDO (base indisponible, requête invalide, typage incompatible avec `+`, etc.) s'échappe sans interception — aucun JSON d'erreur structuré n'est produit, la réponse dépend de la config serveur. Seul le cas `/orders/{id}` absent produit un JSON d'erreur : `{"error": "Commande introuvable"}` (ligne 39).
+- **Gestion des erreurs globales** : Le routeur `public/index.php:11-47` n'enveloppe pas `Db::connect()` (ligne 11) ni les appels Orders/Db dans un bloc `try/catch` global. Toute exception PDO (base indisponible, requête invalide, etc.) s'échappe sans interception — aucun JSON d'erreur structuré n'est produit, la réponse dépend de la config serveur. En particulier, l'opérateur `+` à la ligne 27 n'est pas protégé : si `$version` est `null` (cas 3 — JSON invalide), PHP lève une `TypeError` qui s'échappe non capturée. Seul le cas `/orders/{id}` absent produit un JSON d'erreur : `{"error": "Commande introuvable"}` (ligne 39).
 - **Preuve** : `public/index.php:8-47` — pas de bloc `try/catch` global ; cas 1 (fallback) lignes 16-19 ; cas 2 (fusion) ligne 27 ; cas 3 (TypeError) impossibilité de `null + array` ; `CAHIER_RECETTE.md` section 4.3 décrit le cas fichier absent.
 
-#### Règle 4.2 : Si un déploiement échoue (tests, migrations), la version servie reste inchangée
+#### Règle 4.2 : Si un déploiement échoue (tests, migrations), aucune nouvelle version n'est publiée
 - **Énoncé** : Un merge qui provoque une sortie non-zéro du CI (test rouge, migration échoue, push rejeté) ne produit **aucune nouvelle version** sur la branche `deployed`.
+- **Garantie** : Garantie au niveau Git (`deployed/<env>/version.json` inchangé). Le statut du serveur web (fichier `deployed-version.json` sur le disque) dépend du script d'hébergement — voir « Questions ouvertes ».
 - **Preuve** : `.github/workflows/deploy.yml` — chaque étape peut sortir avec exit 1, arrêtant le workflow avant le push sur `deployed`.
 
 #### Règle 4.3 : Pushes simultanés sur la même branche sont mis en file
@@ -189,14 +191,17 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 
 ## Questions ouvertes et limites
 
-### Chaînon manquant : `deployed-version.json` sur l'hôte et validité du JSON
-- **Problème structurel** : `deploy.yml` publie `deployed/<env>/version.json` sur la branche `deployed`, mais aucune étape du workflow ne copie ce fichier à la racine du projet servi (où `public/index.php:16-19` le lit en tant que `deployed-version.json`). De plus, le code de `public/index.php` n'effectue **aucune validation** du JSON décodé avant de l'utiliser dans l'opérateur `+` (ligne 27).
-- **Impact sur `/version`** : 
-  - **Cas 1 — Fichier absent (nominal local)** : Fallback PHP retourne `{"sha": null, "ref": null, "deployedAt": null, "schemaVersion": <N>}` sans clé `environnement`. Réponse HTTP 200 valide. Les trois champs nuls indiquent un problème de déploiement du fichier, pas une absence de déploiement du code.
+### Chaînon manquant : `deployed-version.json` sur l'hôte — domaine hors dépôt
+- **Problème structurel** : `deploy.yml` publie `deployed/<env>/version.json` sur la branche Git `deployed`, mais aucune étape du workflow intégré au dépôt ne copie ce fichier à la racine du projet servi (où `public/index.php:16-19` le lit en tant que `deployed-version.json`). Le mécanisme de copie vers le disque du serveur est **hors périmètre du dépôt** — webhook, script serveur, rsync, système d'artefacts hébergé, ou processus d'orchestration (Kubernetes, Ansible, etc.).
+- **État du domaine** : 
+  - **Git (`deployed/<env>/version.json` sur branche `deployed`)** : Publication garantie par `deploy.yml` à chaque merge réussi, tracée dans l'historique Git.
+  - **Disque du serveur (`deployed-version.json` à la racine du projet)** : **INCONNU** — aucune garantie, dépend du script d'hébergement externe.
+- **Impact sur `/version` — trois cas mutuellement exclusifs** : 
+  - **Cas 1 — Fichier absent sur le disque (nominal local)** : Fallback PHP retourne `{"sha": null, "ref": null, "deployedAt": null, "schemaVersion": <N>}` sans clé `environnement`. Réponse HTTP 200 valide.
   - **Cas 2 — Fichier présent et JSON valide (production nominale)** : Tous les champs décodés sont fusionnés avec `schemaVersion`. Réponse HTTP 200.
-  - **Cas 3 — Fichier présent mais JSON invalide ou malformé (ERREUR GRAVE)** : `json_decode()` retourne `null`. La ligne 27 (`$version + [...]`) lève une `TypeError` : « Unsupported operand type(s) for +: null and array ». Le service répond HTTP 500 sans JSON structuré. **Blocage complet du endpoint `/version`**. Les consommateurs de l'API reçoivent une erreur serveur non documentée.
+  - **Cas 3 — Fichier présent mais JSON invalide ou malformé (ERREUR GRAVE)** : `json_decode()` retourne `null`. La ligne 27 (`$version + [...]`) lève une `TypeError` : « Unsupported operand type(s) for +: null and array ». Le service répond HTTP 500 sans JSON structuré. **Blocage complet du endpoint `/version`**. 
 - **Résolution** : 
-  - Côté CI/CD (hors dépôt) : Documenter le mécanisme de copie de `deployed/<env>/version.json` vers la racine du projet servi (webhook, script serveur, rsync, ou dépôt d'artefact).
+  - Côté CI/CD (hors dépôt) : Documenter et valider le script d'hébergement qui copie `deployed/<env>/version.json` vers `deployed-version.json` sur le disque.
   - Côté robustesse (dans le dépôt) : Ajouter une validation PHP du JSON après décodage (ex: `if (!is_array($version))`) avant l'opérateur `+`, ou envelopper le tout dans un `try/catch`. **À implémenter avant la montée en production sur données réelles**.
 
 ### Versioning de `data/app.db` et migrations futures
@@ -245,7 +250,7 @@ Voir `DATA_MODEL_AUDIT.md` — schéma SQLite, absent de contraintes, cycle de v
 - `.onboarding/audits/FUNCTIONAL_AUDIT.md` — endpoints, schéma JSON
 - `.onboarding/audits/TESTING_AUDIT.md` — couverture de test
 - `public/index.php` — routeur, endpoints
-- `src/Server.php` — logique Orders
+- `src/Orders.php` — logique Orders
 - `bin/migrate.php` — application des migrations
 - `.github/workflows/ci.yml` — CI, dry-run, tests
 - `.github/workflows/deploy.yml` — publication, deux canaux

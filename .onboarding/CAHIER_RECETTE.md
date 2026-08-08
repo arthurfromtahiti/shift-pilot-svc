@@ -39,7 +39,7 @@ Valider les quatre scénarios critiques du service shift-pilot-svc :
 
 ### Isolation des phases destructrices
 
-Pour les phases 2 et 5, **créer un répertoire de test isolé** :
+Pour les phases 2 et 5, **créer un répertoire de test isolé avec une base vierge** :
 
 ```bash
 # À exécuter UNE FOIS avant la recette
@@ -49,6 +49,10 @@ git clone https://github.com/<org>/shift-pilot-svc.git
 cd shift-pilot-svc
 git remote add productif https://github.com/<org>/shift-pilot-svc.git
 
+# Préparer une base de test vierge
+rm -f data/app.db
+mkdir -p data/backups
+
 # À partir d'ici, vous travaillez dans /tmp/shift-pilot-test/shift-pilot-svc
 # Aucune opération ci-dessous ne modifie votre dépôt productif
 ```
@@ -57,6 +61,8 @@ git remote add productif https://github.com/<org>/shift-pilot-svc.git
 ```bash
 rm -rf /tmp/shift-pilot-test
 ```
+
+**Important — État initial** : La base `data/app.db` est supprimée. Elle sera reconstruite de zéro par `bin/migrate.php`, permettant de vérifier le processus complet d'initialisation. Si vous rencontrez une base déjà à schéma v1 (migration déjà appliquée), exécutez `rm -f data/app.db` pour recommencer.
 
 ---
 
@@ -198,13 +204,13 @@ rm -rf /tmp/shift-pilot-test
   cd ~/shift-pilot-svc
   composer test
   ```
-  Sortie attendue : `Tests passed` (ou `OK` selon PHPUnit) avec 3+ tests verts.
+  Sortie attendue : `Tests passed` (ou `OK` selon PHPUnit) avec 5 tests verts.
 
-- [ ] **3.2** : Vérifier les tests passent les trois cas
+- [ ] **3.2** : Vérifier les noms des tests exécutés
   ```bash
-  composer test 2>&1 | grep -E "testGetAll|testGetById|testResponse"
+  composer test 2>&1 | grep -E "testListeToutesLesCommandes|testTrouveUneCommandeParIdentifiant|testIdentifiantInconnuRenvoieNull|testMontantsStockesEnCentimesEntiers|testVersionDeSchemaLueEnBase"
   ```
-  Chaque test doit être marqué comme PASS.
+  Tous les 5 tests doivent être présents et marqués comme PASS (OK).
 
 ---
 
@@ -230,7 +236,9 @@ rm -rf /tmp/shift-pilot-test
   ```bash
   curl http://127.0.0.1:8080/version
   ```
-  Réponse attendue : HTTP 200 avec `{"sha":null,"ref":null,"deployedAt":null,"schemaVersion":1}` (fichier n'existe pas en local, comportement nominal — la clé `environnement` est absente, pas `null`). **Attention** : si le fichier existait mais contenait du JSON invalide, `json_decode` retournerait `null`, ce qui lèverait une `TypeError` en tentant de fusionner `null` et un tableau, produisant HTTP 500 sans contenu JSON.
+  Réponse attendue : HTTP 200 avec `{"sha":null,"ref":null,"deployedAt":null,"schemaVersion":1}` (fichier n'existe pas en local, comportement nominal — la clé `environnement` est absente, pas `null`). 
+  
+  **Attention — cas d'erreur grave** : Si le fichier existait mais contenait du JSON invalide ou malformé, `json_decode()` retournerait `null`, ce qui lèverait une `TypeError` à la ligne 27 de `public/index.php` en tentant de fusionner `null` et un tableau avec l'opérateur `+`. Le statut HTTP et le corps de la réponse dépendent alors de la configuration PHP de l'hôte (directives `display_errors`, `error_reporting`, mode CLI vs serveur web) : HTTP 500 sans JSON, HTML d'erreur PHP, ou stack trace brute. **Aucun JSON d'erreur structuré ne sera produit dans ce scénario.**
 
 - [ ] **4.4** : `/orders` — tableau JSON des 5 commandes
   ```bash
@@ -282,10 +290,11 @@ rm -rf /tmp/shift-pilot-test
 
 - [ ] **5.1.3** : Faire un changement trivial (ne pas affecter le code fonctionnel)
   ```bash
-  echo "# Test recette $(date +%s)" >> RECETTE.md
-  git add RECETTE.md
+  echo "# Test recette $(date +%s)" > .test-recette-trigger
+  git add .test-recette-trigger
   git commit -m "test(recette): validation pipeline staging"
   ```
+  **Remarque** : Le fichier `.test-recette-trigger` est un fichier temporaire créé exclusivement pour ce test. Il sera supprimé à l'étape 5.1.6.
 
 - [ ] **5.1.4** : Pousser la branche (non destructif, création branche de test)
   ```bash
@@ -324,10 +333,30 @@ rm -rf /tmp/shift-pilot-test
   Vérifier : Les champs `sha`, `ref`, `environnement`, `schemaVersion`, `deployedAt` sont présents et non `null`.
 
 - [ ] **5.2.3** : Vérifier que `production` n'a pas été modifiée
+  
+  Capturer le contenu avant le test :
   ```bash
-  git show origin/deployed:production/version.json
+  git show origin/deployed:production/version.json > /tmp/prod-version-before.json
   ```
-  Comparer les `deployedAt` des deux fichiers — ils ne doivent pas être identiques (timestamps distincts). Cela confirme l'isolation des deux canaux.
+  
+  Effectuer un second push sur `staging` et attendre le workflow :
+  ```bash
+  cd ~/shift-pilot-svc
+  git checkout test/staging-recette
+  echo "# Second test $(date +%s)" >> .test-recette-trigger
+  git add .test-recette-trigger
+  git commit --amend -m "test(recette): second validation pipeline staging"
+  git push origin test/staging-recette --force-with-lease
+  ```
+  
+  Attendre le workflow, puis vérifier que production n'a pas changé :
+  ```bash
+  git fetch origin deployed
+  git show origin/deployed:production/version.json > /tmp/prod-version-after.json
+  diff /tmp/prod-version-before.json /tmp/prod-version-after.json
+  ```
+  
+  Résultat attendu : Aucune différence (fichier `production/version.json` inchangé). Cela confirme l'isolation entre `staging` et `production`.
 
 ---
 
