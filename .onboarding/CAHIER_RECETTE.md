@@ -121,33 +121,41 @@ rm -rf /tmp/shift-pilot-test
 
 **Note préalable : Garantir l'état initial (obligatoire)**
 
-La procédure d'isolation en début du cahier supprime déjà `data/app.db` pour repartir d'une base vierge. **Si vous rencontrez une base déjà migrée**, la procédure doit d'abord vérifier et corriger l'état :
+La procédure d'isolation en début du cahier supprime déjà `data/app.db`. **Avant toute étape de Phase 2, vous devez garantir que la base est vierge (v0)** :
 
 ```bash
 cd /tmp/shift-pilot-test/shift-pilot-svc
-# Vérifier l'état courant
+# Vérifier explicitement et réinitialiser si nécessaire
+rm -f data/app.db
+# La base est maintenant vierge. Vérifier :
 php bin/migrate.php --dry-run
+```
 
-# Si affichage « Aucune migration à appliquer », la base est déjà à v1
-# Réinitialiser la base vierge (l'étape d'isolation ne l'a pas fait)
+Le comportement attendu pour une base **vierge (v0)** est le contenu SQL de `001_init.sql` (création des tables, insertion des 5 commandes).
+
+**Cas de base déjà migrée (v1)** : Si `php bin/migrate.php --dry-run` affiche « Aucune migration à appliquer », cela signifie que `data/app.db` existe et est déjà à v1. Vous devez réinitialiser :
+
+```bash
 rm -f data/app.db
 ```
 
-**À partir d'ici, Phase 2 est exécutée avec une base garantie vierge (v0).**
+Puis recommencer à l'étape 2.1.1.
 
-- [ ] **2.1.1** : Dans le clone isolé, vérifier l'état initial de la base
+- [ ] **2.1.1** : Dans le clone isolé, vérifier l'état initial de la base (vierge)
   ```bash
   cd /tmp/shift-pilot-test/shift-pilot-svc
+  # Vérifier qu'aucune base n'existe
+  test ! -f data/app.db && echo "✓ Base vierge" || echo "✗ Base existe déjà"
+  # Exécuter le dry-run
   php bin/migrate.php --dry-run
   ```
   Comportement attendu (base vierge v0) : Affichage du contenu SQL de `001_init.sql` (création des tables, insertion des 5 commandes).
 
-- [ ] **2.1.2** : Vérifier que `data/app.db` n'a pas changé
+- [ ] **2.1.2** : Vérifier que le dry-run n'a pas créé la base
   ```bash
-  ls -la data/app.db
-  # Noter l'horodatage
+  test ! -f data/app.db && echo "✓ Pas de base créée" || echo "✗ Base créée par le dry-run"
   ```
-  Ré-exécuter le dry-run, vérifier que l'horodatage de `data/app.db` n'a pas changé (essai à blanc ne modifie rien).
+  Le fichier `data/app.db` ne doit **pas** exister après le dry-run (essai à blanc ne modifie rien).
 
 ### Étape 2.2 — Application réelle avec sauvegarde
 
@@ -232,11 +240,21 @@ rm -f data/app.db
   ```
   Sortie attendue : `Tests passed` (ou `OK` selon PHPUnit) avec 5 tests verts.
 
-- [ ] **3.2** : Vérifier les noms des tests exécutés
+- [ ] **3.2** : Vérifier que tous les tests passent
   ```bash
-  composer test 2>&1 | grep -E "testListeToutesLesCommandes|testTrouveUneCommandeParIdentifiant|testIdentifiantInconnuRenvoieNull|testMontantsStockesEnCentimesEntiers|testVersionDeSchemaLueEnBase"
+  composer test 2>&1
   ```
-  Tous les 5 tests doivent être présents et marqués comme PASS (OK).
+  Sortie attendue : Résumé final indiquant 5 tests exécutés et tous marqués comme PASS/OK. Les 5 tests sont :
+  - `testListeToutesLesCommandes()` — Vérifie que `/orders` retourne 5 commandes
+  - `testTrouveUneCommandeParIdentifiant()` — Vérifie que `/orders/1` retourne la bonne commande
+  - `testIdentifiantInconnuRenvoieNull()` — Vérifie que `/orders/999` retourne `null`
+  - `testMontantsStockesEnCentimesEntiers()` — Vérifie que les montants sont en centimes (entiers)
+  - `testVersionDeSchemaLueEnBase()` — Vérifie que le schemaVersion est lu en base
+  
+  **Remarque** : La sortie PHPUnit complète inclut les noms, lignes, durée. Un simple grep sur les noms peut ne rien retourner si le formateur de sortie est différent. Vérifier plutôt le code de sortie et le nombre total de tests :
+  ```bash
+  composer test && echo "✓ Tests réussis"
+  ```
 
 ---
 
@@ -320,13 +338,14 @@ Pour valider complètement le pipeline (CI + déploiement), nous devons fusionne
   git checkout -b test/staging-recette
   ```
 
-- [ ] **5.1.3** : Faire un changement trivial (ne pas affecter le code fonctionnel)
+- [ ] **5.1.3** : Faire un changement trivial **temporaire** (ne pas affecter le code fonctionnel)
   ```bash
-  echo "# Test recette $(date +%s)" > .test-recette-trigger
-  git add .test-recette-trigger
-  git commit -m "test(recette): validation pipeline staging"
+  # Créer un fichier temporaire explicite que vous nettoierez après
+  echo "# Test recette $(date +%s)" > .github/.test-pipeline-trigger
+  git add .github/.test-pipeline-trigger
+  git commit -m "test(recette): validation pipeline staging — fichier à nettoyer"
   ```
-  **Remarque** : Le fichier `.test-recette-trigger` est un fichier temporaire créé exclusivement pour ce test. Il sera supprimé à l'étape 5.1.6.
+  **Important** : Le fichier `.github/.test-pipeline-trigger` est créé **uniquement pour déclencher le workflow**. Il sera explicitement supprimé à l'étape 5.1.6 avant de fusionner dans `staging`. Cela garantit que `staging` reste clean après la recette.
 
 - [ ] **5.1.4** : Pousser la branche et observer les checks CI
   ```bash
@@ -351,14 +370,42 @@ Pour valider complètement le pipeline (CI + déploiement), nous devons fusionne
   
   Le `push` vers `staging` déclenche **immédiatement** le workflow `deploy.yml`. Cela créera/mettra à jour `deployed/staging/version.json` sur la branche `deployed`.
 
-- [ ] **5.1.6** : Nettoyer la branche de test
+- [ ] **5.1.6** : **Avant de fusionner**, nettoyer la branche de test
+  ```bash
+  # Toujours sur la branche test/staging-recette
+  # Supprimer le fichier temporaire qui ne doit jamais arriver dans staging
+  rm .github/.test-pipeline-trigger
+  git add -u  # Stage la suppression
+  git commit --amend --no-edit  # Amend le commit précédent pour inclure la suppression
+  # OU créer un commit de nettoyage :
+  git commit -m "test(recette): nettoyer fichier temporaire"
+  ```
+  
+  Vérifier que le fichier `.github/.test-pipeline-trigger` n'existe **plus** localement :
+  ```bash
+  test ! -f .github/.test-pipeline-trigger && echo "✓ Fichier temporaire nettoyé"
+  ```
+  
+  Pousser la branche nettoyée :
+  ```bash
+  git push origin test/staging-recette
+  ```
+  
+  **Puis** fusionner dans `staging` (créer une PR sur GitHub, approuver et fusionner, ou fusionner en ligne de commande) :
   ```bash
   git checkout staging
   git pull origin staging
+  git merge test/staging-recette
+  git push origin staging
+  ```
+  
+  **Enfin**, supprimer la branche de test :
+  ```bash
   git branch -D test/staging-recette
   git push origin --delete test/staging-recette
   ```
-  Vérifier : Le fichier `.test-recette-trigger` a disparu de `staging` (il existe uniquement sur la branche de test supprimée).
+  
+  Vérifier : La branche `test/staging-recette` n'existe plus, et le fichier `.github/.test-pipeline-trigger` n'existe pas dans `staging`.
 
 ### Étape 5.2 — Vérifier la publication sur la branche `deployed` (artefact Git, pas le fichier servi)
 
@@ -381,17 +428,18 @@ Pour valider complètement le pipeline (CI + déploiement), nous devons fusionne
 
 - [ ] **5.2.3** : Vérifier que `production` n'a **pas** été modifiée par le workflow staging
   
-  Capturer à nouveau la version production et comparer les SHA :
+  Capturer à nouveau la version production et comparer les contenus complets :
   ```bash
   git fetch origin deployed
   git show origin/deployed:production/version.json > /tmp/prod-version-after.json
-  echo "SHA après: $(sha256sum /tmp/prod-version-after.json)"
+  echo "SHA avant: $(sha256sum /tmp/prod-version-before.json | cut -d' ' -f1)"
+  echo "SHA après: $(sha256sum /tmp/prod-version-after.json | cut -d' ' -f1)"
   diff /tmp/prod-version-before.json /tmp/prod-version-after.json
   ```
   
   Résultat attendu : 
-  - Les deux SHA256 sont identiques.
-  - La sortie de `diff` est vide.
+  - Les deux SHA256 sont **identiques**.
+  - La sortie de `diff` est **vide** (fichiers identiques).
   
   Cela confirme l'isolation entre `staging` et `production` — un push sur `staging` ne modifie jamais `deployed/production/version.json`.
 
