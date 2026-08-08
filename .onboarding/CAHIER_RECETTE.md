@@ -230,19 +230,24 @@ rm -rf /tmp/shift-pilot-test
   ```bash
   curl http://127.0.0.1:8080/version
   ```
-  Réponse attendue : HTTP 200 avec `{"sha":null,"ref":null,"environnement":null,"schemaVersion":1,"deployedAt":null}` (fichier n'existe pas en local, comportement nominal). **Attention** : si le fichier existait mais contenait du JSON invalide, la réponse serait HTTP 500 (le code lève une `TypeError` en tentant de fusionner `null` et un tableau).
+  Réponse attendue : HTTP 200 avec `{"sha":null,"ref":null,"deployedAt":null,"schemaVersion":1}` (fichier n'existe pas en local, comportement nominal — la clé `environnement` est absente, pas `null`). **Attention** : si le fichier existait mais contenait du JSON invalide, `json_decode` retournerait `null`, ce qui lèverait une `TypeError` en tentant de fusionner `null` et un tableau, produisant HTTP 500 sans contenu JSON.
 
 - [ ] **4.4** : `/orders` — tableau JSON des 5 commandes
   ```bash
-  curl http://127.0.0.1:8080/orders | jq '.[0]'
+  curl http://127.0.0.1:8080/orders | jq .
   ```
-  Vérifier : Tous les champs présents (`id`, `client`, `montant_cents`, `devise`, `statut`). Exemple : `id: 1, client: "Heiata", montant_cents: 420000, devise: "XPF", statut: "payee"`.
+  Vérifier : Tableau contenant exactement 5 objets, chacun avec les champs `id`, `client`, `montant_cents`, `devise`, `statut`. Correspondance attendue avec `migrations/001_init.sql` :
+  - `id: 1, client: "Heiata", montant_cents: 420000, devise: "XPF", statut: "payee"`
+  - `id: 2, client: "Teiki", montant_cents: 180000, devise: "XPF", statut: "annulee"`
+  - `id: 3, client: "Manoa", montant_cents: 960000, devise: "XPF", statut: "payee"`
+  - `id: 4, client: "Vaite", montant_cents: 305000, devise: "XPF", statut: "payee"`
+  - `id: 5, client: "Moana", montant_cents: 75000, devise: "XPF", statut: "annulee"`
 
 - [ ] **4.5** : `/orders/1` — commande spécifique
   ```bash
-  curl http://127.0.0.1:8080/orders/1 | jq .id
+  curl http://127.0.0.1:8080/orders/1 | jq .
   ```
-  Réponse attendue : `1`
+  Réponse attendue : `{"id": 1, "client": "Heiata", "montant_cents": 420000, "devise": "XPF", "statut": "payee"}`
 
 - [ ] **4.6** : `/orders/999` — ID absent
   ```bash
