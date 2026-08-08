@@ -206,13 +206,15 @@ curl -s http://127.0.0.1:8080/orders | jq .
 **Sortie attendue** :
 ```json
 [
-  {"id": 1, "client": "Client 1", "montant_cents": 10000, "devise": "XPF", "statut": "payee"},
-  {"id": 2, "client": "Client 2", "montant_cents": 20000, "devise": "XPF", "statut": "annulee"},
-  ...
+  {"id": 1, "client": "Heiata", "montant_cents": 420000, "devise": "XPF", "statut": "payee"},
+  {"id": 2, "client": "Teiki", "montant_cents": 180000, "devise": "XPF", "statut": "annulee"},
+  {"id": 3, "client": "Manoa", "montant_cents": 960000, "devise": "XPF", "statut": "payee"},
+  {"id": 4, "client": "Vaite", "montant_cents": 305000, "devise": "XPF", "statut": "payee"},
+  {"id": 5, "client": "Moana", "montant_cents": 75000, "devise": "XPF", "statut": "annulee"}
 ]
 ```
 
-**Vérification** : 5 commandes retournées, triées par `id`.
+**Vérification** : 5 commandes retournées (Heiata, Teiki, Manoa, Vaite, Moana), triées par `id`, avec montants en centimes.
 
 ### 4.5 Tester `/orders/{id}`
 
@@ -222,7 +224,7 @@ curl -s http://127.0.0.1:8080/orders/1 | jq .
 
 **Sortie attendue** :
 ```json
-{"id": 1, "client": "Client 1", "montant_cents": 10000, "devise": "XPF", "statut": "payee"}
+{"id": 1, "client": "Heiata", "montant_cents": 420000, "devise": "XPF", "statut": "payee"}
 ```
 
 Identifier manquant :

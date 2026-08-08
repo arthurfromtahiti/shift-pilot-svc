@@ -125,7 +125,8 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 - **Énoncé** : La version **vraiment** déployée est celle enregistrée dans `deployed/<env>/version.json` sur la branche `deployed`, jamais supposée depuis le code ou les constantes.
 - **Corollaire** : Le champ `schemaVersion` dans le JSON est lu **en base après migration**, pas supposé depuis le nom du fichier de migration.
 - **Contrat du endpoint `/version`** : Celui-ci retourne un JSON avec les champs `sha`, `ref`, `environnement`, `schemaVersion`, `deployedAt`. Si le fichier `deployed-version.json` est absent du disque, les champs `sha`, `ref`, `deployedAt` sont `null` (valeurs par défaut en PHP) ; `schemaVersion` est toujours lu en base en temps réel. **Si le fichier est présent mais contient du JSON invalide**, `json_decode` retourne `null`, et la ligne 27 de `public/index.php` (`json_encode($version + [...])`) lève une `TypeError` : « Unsupported operand type(s) for +: null and array ». Le service renvoie HTTP 500 sans contenu utile.
-- **Preuve** : `public/index.php:16-19` — lecture du `deployed-version.json` côté serveur avec valeur par défaut si absent ; `.github/workflows/deploy.yml:46` — `php -r '... App\Db::schemaVersion(...)'` lu post-migration.
+- **Gestion des erreurs** : `public/index.php:11` établit une connexion PDO sans `try/catch` global. Toute exception PDO (base indisponible, requête invalide, etc.) s'échappe sans interception — le routeur ne produit pas de JSON d'erreur structuré, mais une réponse HTML/stack trace dépendant de `display_errors`. C'est une **Question ouverte (numéro 6)** à documenter.
+- **Preuve** : `public/index.php:8-47` — pas de bloc `try/catch` autour de `Db::connect()` ou des appels Orders/Db ; `CAHIER_RECETTE.md` section 5.1 décrit le cas base indisponible.
 
 #### Règle 4.2 : Si un déploiement échoue (tests, migrations), la version servie reste inchangée
 - **Énoncé** : Un merge qui provoque une sortie non-zéro du CI (test rouge, migration échoue, push rejeté) ne produit **aucune nouvelle version** sur la branche `deployed`.
@@ -189,6 +190,12 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 - **Endpoints publics** : `/health`, `/version`, `/orders`, `/orders/{id}` sont accessibles sans authentification.
 - **Données sensibles** : Aucune (données fictives), mais à vérifier si ce dépôt évoluait vers des données réelles.
 
+### Robustesse des endpoints : pas de gestion centralisée d'exceptions
+- **Problème** : `public/index.php` n'enveloppe pas `Db::connect()` ni les appels Orders/Db dans un bloc `try/catch` global. Une exception PDO (base indisponible, requête invalide, etc.) s'échappe sans interception.
+- **Comportement** : Aucun JSON d'erreur structuré n'est produit ; la réponse HTTP dépend de la config serveur `display_errors` (HTML, stack trace, ou white screen).
+- **Endpoints affectés** : `/version` (lecture schéma), `/orders`, `/orders/{id}` (requête sur Orders).
+- **Résolution** : À implémenter avant toute extension — ajouter un middleware ou un `try/catch` au routeur pour produire des JSON d'erreur cohérents (ex: HTTP 500 + `{"error": "..."}` pour toute exception non traitée).
+
 ---
 
 ## Conformité et risques
@@ -218,3 +225,4 @@ Voir `DATA_MODEL_AUDIT.md` — schéma SQLite, absent de contraintes, cycle de v
 - `.github/workflows/deploy.yml` — publication, deux canaux
 - `migrations/001_init.sql` — schéma, données initiales
 - `README.md` — contexte, migrations, développement
+- `CAHIER_RECETTE.md` — test cases, section 5.1 (base indisponible), section 5.2 (JSON corrompu)

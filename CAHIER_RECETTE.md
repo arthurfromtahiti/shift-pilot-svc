@@ -83,8 +83,10 @@ Test Suite PASS
   [✓] testListeToutesLesCommandes — 5 commandes retournées
   [✓] testTrouveUneCommandeParIdentifiant — détail d'une commande
   [✓] testIdentifiantInconnuRenvoieNull — absence gérée
+  [✓] testMontantsStockesEnCentimesEntiers — montants stockés en centimes entiers
+  [✓] testVersionDeSchemaLueEnBase — version schema lue en base
 
-3 tests, 3 ok
+5 tests, 5 ok
 ```
 
 ---
@@ -533,7 +535,7 @@ mv data/app.db.bak data/app.db
 
 ## 5.2 — Fichier `deployed-version.json` corrompu
 
-**Objectif** : Valider que le routeur gère un fichier JSON invalide sans exposer d'erreur.
+**Objectif** : Valider que le routeur gère un fichier JSON invalide de manière robuste.
 
 ### Étape A : Créer un JSON invalide
 
@@ -544,27 +546,21 @@ echo "{invalid json" > deployed-version.json
 ### Étape B : Requête
 
 ```bash
-curl -s http://127.0.0.1:8080/version | jq .
+curl -s http://127.0.0.1:8080/version 2>&1
 ```
 
 **Vérifications** :
-- [ ] Pas d'erreur PHP levée (suppresseur `@` en place)
-- [ ] Réponse JSON valide et cohérente (pas le JSON corrompu)
-- [ ] Champs `sha`, `ref`, `deployedAt` valent `null` (fallback au tableau vide)
-- [ ] `schemaVersion` vaut `1` (lu depuis la base, qui est valide)
-- [ ] Réponse complète :
-  ```json
-  {
-    "sha": null,
-    "ref": null,
-    "deployedAt": null,
-    "schemaVersion": 1
-  }
-  ```
+- [ ] Une erreur est levée (TypeError à la ligne 27 de `public/index.php` en tentant de merger `null + [...]`)
+- [ ] Pas de réponse JSON valide
+- [ ] Code HTTP ne sera probablement pas 5xx (selon config PHP `display_errors`)
 
-**Raison** : `public/index.php:16-19` utilise `@json_decode()` et l'opérateur `+` pour merger 
-un fallback. C'est une **Question ouverte (numéro 5)** du `QUESTIONS_OUVERTES.md` — la sécurité 
-peut être améliorée (vérifier que `json_decode` retourne bien un array, pas null).
+**Raison** : `public/index.php:17-19` utilise `json_decode()` sans suppresseur d'erreur. Lorsque 
+le JSON est invalide, `json_decode()` retourne `null`. À la ligne 27, l'opérateur `+` tente de 
+merger `null` avec un array, ce qui provoque un **TypeError en PHP 8.1+**.
+
+C'est une **Question ouverte (numéro 5)** du `QUESTIONS_OUVERTES.md` — la robustesse doit être 
+améliorée (vérifier le type retourné par `json_decode`, ou utiliser une alternative de fallback 
+plus sûre).
 
 ### Étape C : Nettoyer
 
