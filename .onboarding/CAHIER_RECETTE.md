@@ -119,17 +119,28 @@ rm -rf /tmp/shift-pilot-test
 
 ### Étape 2.1 — Essai à blanc
 
+**Note préalable : Garantir l'état initial (obligatoire)**
+
+La procédure d'isolation en début du cahier supprime déjà `data/app.db` pour repartir d'une base vierge. **Si vous rencontrez une base déjà migrée**, la procédure doit d'abord vérifier et corriger l'état :
+
+```bash
+cd /tmp/shift-pilot-test/shift-pilot-svc
+# Vérifier l'état courant
+php bin/migrate.php --dry-run
+
+# Si affichage « Aucune migration à appliquer », la base est déjà à v1
+# Réinitialiser la base vierge (l'étape d'isolation ne l'a pas fait)
+rm -f data/app.db
+```
+
+**À partir d'ici, Phase 2 est exécutée avec une base garantie vierge (v0).**
+
 - [ ] **2.1.1** : Dans le clone isolé, vérifier l'état initial de la base
   ```bash
   cd /tmp/shift-pilot-test/shift-pilot-svc
   php bin/migrate.php --dry-run
   ```
-  Comportement attendu — **deux cas mutuellement exclusifs** :
-  
-  - **Cas A : Base vierge (v0)** : Affichage du contenu SQL de `001_init.sql` (création des tables, insertion des 5 commandes).
-  - **Cas B : Base déjà migrée (v1)** : Message « Aucune migration à appliquer » (la base a déjà le schéma complet).
-  
-  **Si vous êtes en cas B** : Exécutez `rm -f data/app.db && php bin/migrate.php --dry-run` pour repartir d'une base vierge. Le reste de Phase 2 suppose la base à v0.
+  Comportement attendu (base vierge v0) : Affichage du contenu SQL de `001_init.sql` (création des tables, insertion des 5 commandes).
 
 - [ ] **2.1.2** : Vérifier que `data/app.db` n'a pas changé
   ```bash
@@ -288,7 +299,13 @@ rm -rf /tmp/shift-pilot-test
 
 **Environnement** : Dépôt GitHub, branche `staging`
 
-### Étape 5.1 — Créer une branche de test sur `staging`
+### Étape 5.1 — Créer une branche de test et la fusionner dans `staging`
+
+**⚠️ Important — Mécanisme des workflows** :
+- `ci.yml` se déclenche sur **les PRs** (indépendamment du push réel).
+- `deploy.yml` se déclenche **uniquement sur les `push` directs** vers `staging` ou `main`, **jamais sur les PRs**.
+
+Pour valider complètement le pipeline (CI + déploiement), nous devons fusionner la branche de test dans `staging` pour déclencher `deploy.yml`.
 
 - [ ] **5.1.1** : Synchroniser les branches locales
   ```bash
@@ -311,56 +328,72 @@ rm -rf /tmp/shift-pilot-test
   ```
   **Remarque** : Le fichier `.test-recette-trigger` est un fichier temporaire créé exclusivement pour ce test. Il sera supprimé à l'étape 5.1.6.
 
-- [ ] **5.1.4** : Pousser la branche (non destructif, création branche de test)
+- [ ] **5.1.4** : Pousser la branche et observer les checks CI
   ```bash
   git push origin test/staging-recette
   ```
-  Aller sur GitHub et créer une PR vers `staging`. **Important : Cette PR n'est qu'une simulation, vous ne la fusionnerez pas.**
-
-- [ ] **5.1.5** : Observer les checks CI
+  Aller sur GitHub et créer une PR vers `staging`. 
+  
   Attendre que le workflow `ci.yml` se déclenche sur la PR :
   - Dry-run des migrations (`composer migrate:dry`)
   - Tests PHPUnit (`composer test`)
   - Tous les checks doivent être verts ✓
 
-- [ ] **5.1.6** : Annuler la PR (fermer sans fusionner) et nettoyer
+- [ ] **5.1.5** : Fusionner la branche dans `staging` (pour déclencher `deploy.yml`)
   ```bash
-  # Sur GitHub, cliquer "Close pull request"
-  # Localement :
+  # Sur GitHub : approuver et fusionner la PR ("Squash and merge" ou "Create a merge commit")
+  # OU en ligne de commande :
   git checkout staging
+  git pull origin staging
+  git merge test/staging-recette
+  git push origin staging
+  ```
+  
+  Le `push` vers `staging` déclenche **immédiatement** le workflow `deploy.yml`. Cela créera/mettra à jour `deployed/staging/version.json` sur la branche `deployed`.
+
+- [ ] **5.1.6** : Nettoyer la branche de test
+  ```bash
+  git checkout staging
+  git pull origin staging
   git branch -D test/staging-recette
   git push origin --delete test/staging-recette
-  git pull origin staging
   ```
-  Vérifier : Le fichier `.test-recette-trigger` a disparu de `staging` (il existait uniquement sur la branche de test).
+  Vérifier : Le fichier `.test-recette-trigger` a disparu de `staging` (il existe uniquement sur la branche de test supprimée).
 
 ### Étape 5.2 — Vérifier la publication sur la branche `deployed` (artefact Git, pas le fichier servi)
 
 **⚠️ Important** : Cette étape valide que `deploy.yml` a **écrit** `deployed/<env>/version.json` sur la branche Git `deployed`. **Ce n'est pas le fichier que le code lit en production** (`public/index.php` lit `deployed-version.json` sur le disque du serveur). Le lien entre ces deux fichiers est hors dépôt (copie par webhook, script, ou mécanisme hébergement).
 
-- [ ] **5.2.1** : Récupérer la branche `deployed` et capturer la version production
+- [ ] **5.2.1** : **Avant** le push staging, capturer la version production actuelle
   ```bash
   git fetch origin deployed
   git show origin/deployed:production/version.json > /tmp/prod-version-before.json
+  echo "SHA avant: $(sha256sum /tmp/prod-version-before.json)"
   ```
-  Vérifier : Fichier créé avec contenu JSON valide.
+  Vérifier : Fichier créé avec contenu JSON valide. Consigner le SHA256.
 
-- [ ] **5.2.2** : Lire la version publiée pour `staging` après votre push
+- [ ] **5.2.2** : **Après** votre fusion dans `staging` (étape 5.1.5), refetcher et vérifier `staging` a été mise à jour
   ```bash
+  git fetch origin deployed
   git show origin/deployed:staging/version.json
   ```
-  Vérifier : Les champs `sha`, `ref`, `environnement`, `schemaVersion`, `deployedAt` sont présents et non `null`.
+  Vérifier : Les champs `sha`, `ref`, `environnement`, `schemaVersion`, `deployedAt` sont présents et non `null`. Le `ref` doit être `staging`.
 
 - [ ] **5.2.3** : Vérifier que `production` n'a **pas** été modifiée par le workflow staging
   
-  Comparer le contenu avant et après :
+  Capturer à nouveau la version production et comparer les SHA :
   ```bash
   git fetch origin deployed
   git show origin/deployed:production/version.json > /tmp/prod-version-after.json
+  echo "SHA après: $(sha256sum /tmp/prod-version-after.json)"
   diff /tmp/prod-version-before.json /tmp/prod-version-after.json
   ```
   
-  Résultat attendu : Aucune différence (la sortie de `diff` est vide). Cela confirme l'isolation entre `staging` et `production` — un push sur `staging` ne modifie jamais `deployed/production/version.json`.
+  Résultat attendu : 
+  - Les deux SHA256 sont identiques.
+  - La sortie de `diff` est vide.
+  
+  Cela confirme l'isolation entre `staging` et `production` — un push sur `staging` ne modifie jamais `deployed/production/version.json`.
 
 ---
 

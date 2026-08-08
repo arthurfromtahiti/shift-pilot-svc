@@ -22,7 +22,7 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 
 ### Systèmes
 - **GitHub Actions** : Orchestre CI/CD, exécute les migrations en isolation (`ubuntu-latest`), pousse sur `deployed`. Déclenchement : push sur `main` ou `staging`.
-- **Serveur web** : Héberge la version servie. **Note** : L'enregistrement des appels API n'est pas implémenté dans le code fourni (`public/index.php` n'a pas de logging). Le dépôt ne documente pas ce mécanisme.
+- **Serveur web** : Héberge la version servie. **Note** : Le code fourni (`public/index.php`) n'implémente pas d'enregistrement des appels API — aucun log structuré des requêtes HTTP n'est produit. Le dépôt ne documente pas ce mécanisme.
 
 ---
 
@@ -56,8 +56,14 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 
 #### Règle 1.3 : Schéma JSON de chaque commande — champs et types
 - **Énoncé** : Chaque commande en base porte les champs `id` (INTEGER), `client` (TEXT), `montant_cents` (INTEGER), `devise` (TEXT, défaut 'XPF'), `statut` (TEXT). Tous obligatoires en base.
-- **Ce qui est prouvé** : Jeu de données `001_init.sql` définit les 5 lignes ; `src/Orders.php:15,20` récupère les champs via SELECT ; tests `OrdersTest.php::testMontantsStockesEnCentimesEntiers()` et `testTrouveUneCommandeParIdentifiant()` vérifient les types en couche Orders (pas HTTP).
-- **Ce qui n'est pas prouvé** : Le codes HTTP de réussite (nominalement 200), la structure HTTP de la réponse (nominalement JSON valide au format attendu), et les codes d'erreur HTTP (`public/index.php` n'est pas couvert par la suite de test). Ces comportements sont accessibles via recette manuelle (voir `CAHIER_RECETTE.md`), pas par une suite automatisée.
+- **Ce qui est prouvé** : 
+  - **Schéma de données** : `001_init.sql` définit les 5 lignes avec les champs et types.
+  - **Couche métier** : `src/Orders.php:15,20` récupère exactement ces champs via SELECT.
+  - **Couche test** : Cinq tests PHPUnit (`OrdersTest.php`) couvrent les méthodes `all()` et `find()` de la couche Orders en vérifiant les types et montants entiers.
+- **Ce qui n'est pas prouvé** : 
+  - **Codes HTTP** : Ni la suite de test ni les audits n'observent les codes HTTP de réussite (`public/index.php` n'est pas couvert par PHPUnit).
+  - **Format JSON** : La validation que les champs sont produits au format JSON valide dépend de l'exécution du routeur HTTP (non testée).
+  - **Codes d'erreur HTTP** : Le code 404 pour un ID absent est implémenté (`public/index.php:39`), mais sa preuve HTTP n'est pas dans la suite. Les cas HTTP sont accessibles via recette manuelle (voir `CAHIER_RECETTE.md`), pas par une suite automatisée.
 
 ---
 
@@ -137,7 +143,7 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 
 #### Règle 4.1 : Artefact Git (branche `deployed`) vs fichier serveur — deux domaines distincts
 - **Énoncé** : La source de vérité Git (`deployed/<env>/version.json` sur la branche `deployed`) est toujours **publiée** par le workflow CI/CD après un merge réussi. Le fichier à la racine du serveur (`deployed-version.json`, qui contient également `schemaVersion`) est **hors périmètre du dépôt** — sa présence et son contenu dépendent du script d'hébergement.
-- **Corollaire du champ `schemaVersion`** : Le champ est **lu en temps réel en base** par `Db::schemaVersion($pdo)`, puis ajouté au tableau du fichier par l'opérateur `+` de PHP. **La priorité est celle du tableau gauche** : si le fichier `deployed-version.json` décodé contient déjà `schemaVersion`, la valeur du fichier est **conservée** (l'opérateur `+` préserve les clés du premier opérande). Si absent du fichier, la valeur de la base est ajoutée.
+- **Corollaire du champ `schemaVersion`** : Le champ est **publié dans le JSON** de `deploy.yml` (ligne 61 : `"schemaVersion": $SCHEMA` où `SCHEMA` est lue en base) pour enregistrer le schéma au moment du déploiement. Côté lecture (`public/index.php:27`), l'opérateur `+` de PHP fusionne le fichier décodé avec `['schemaVersion' => Db::schemaVersion($pdo)]`. **La priorité est celle du tableau gauche** : si le fichier `deployed-version.json` décodé contient déjà `schemaVersion` (cas nominal après déploiement), la valeur du fichier est **conservée** (l'opérateur `+` préserve les clés du premier opérande). Si absent du fichier, la valeur live de la base est ajoutée (cas fallback ou fichier malformé).
 - **Contrat du endpoint `/version` — trois cas mutuellement exclusifs** :
   - **Cas 1 — Fichier `deployed-version.json` absent (nominal local)** : 
     - **Code** : `public/index.php:16-19` fallback vers `['sha' => null, 'ref' => null, 'deployedAt' => null]`
@@ -258,11 +264,12 @@ Voir `DATA_MODEL_AUDIT.md` — schéma SQLite, absent de contraintes, cycle de v
 - `.onboarding/workflows/WORKFLOW_DEPLOIEMENT.md` — deux canaux, publication version.json
 - `.onboarding/audits/FUNCTIONAL_AUDIT.md` — endpoints, schéma JSON
 - `.onboarding/audits/TESTING_AUDIT.md` — couverture de test
-- `public/index.php` — routeur, endpoints
-- `src/Orders.php` — logique Orders
-- `bin/migrate.php` — application des migrations
-- `.github/workflows/ci.yml` — CI, dry-run, tests
-- `.github/workflows/deploy.yml` — publication, deux canaux
-- `migrations/001_init.sql` — schéma, données initiales
-- `README.md` — contexte, migrations, développement
-- `CAHIER_RECETTE.md` — test cases, section 5.1 (base indisponible), section 5.2 (JSON corrompu)
+- `public/index.php` — routeur, endpoints, `/version`, fusion de version.json
+- `src/Orders.php` — logique Orders, requêtes `SELECT`
+- `bin/migrate.php` — application des migrations, sauvegarde, transactions
+- `.github/workflows/ci.yml` — CI, dry-run des migrations, tests
+- `.github/workflows/deploy.yml` — publication sur branche `deployed`, deux canaux, horodatage
+- `migrations/001_init.sql` — schéma, données initiales (5 commandes)
+- `tests/OrdersTest.php` — 5 tests PHPUnit couvrant Orders
+- `README.md` — contexte, migrations, développement local
+- `CAHIER_RECETTE.md` — plan de recette avec 6 phases
