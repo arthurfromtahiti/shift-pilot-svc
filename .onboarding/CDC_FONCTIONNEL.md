@@ -133,12 +133,23 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 #### Règle 4.1 : La version servie ne se déduit jamais du code
 - **Énoncé** : La version **vraiment** déployée est celle enregistrée dans `deployed/<env>/version.json` sur la branche `deployed`, jamais supposée depuis le code ou les constantes.
 - **Corollaire** : Le champ `schemaVersion` dans le JSON est lu **en base après migration**, pas supposé depuis le nom du fichier de migration.
-- **Contrat du endpoint `/version`** : Celui-ci retourne un JSON avec les champs `sha`, `ref`, `schemaVersion`, `deployedAt`. Le champ `environnement` n'est **jamais présent** en tant que clé (pas même `null`) si le fichier `deployed-version.json` est absent du disque.
-  - **Cas 1 — Fichier absent (local)** : Les champs `sha`, `ref`, `deployedAt` prennent la valeur `null` (fallback PHP ligne 19) ; `schemaVersion` est toujours lu en base en temps réel. Résultat : `{"sha": null, "ref": null, "deployedAt": null, "schemaVersion": <N>}` — clé `environnement` absente.
-  - **Cas 2 — Fichier présent et valide (production)** : JSON décodé contient tous les champs (y compris `environnement` si le workflow l'y a écrit) ; `schemaVersion` est ajouté en temps réel via la fusion `$version + [...]`. 
-  - **Cas 3 — Fichier présent mais JSON invalide** : `json_decode()` retourne `null` (ligne 18), et la fusion `null + array` à la ligne 27 lève une `TypeError` : « Unsupported operand type(s) for +: null and array ». Le service renvoie HTTP 500 sans contenu JSON structuré.
-- **Gestion des erreurs** : Le routeur `public/index.php:11-47` n'enveloppe pas `Db::connect()` ni les appels Orders/Db dans un bloc `try/catch` global. Toute exception PDO (base indisponible, requête invalide, etc.) s'échappe sans interception — aucun JSON d'erreur structuré n'est produit, la réponse dépend de la config serveur `display_errors` (HTML, stack trace, ou white screen). Seul le cas `/orders/{id}` absent produit un JSON d'erreur (ligne 39 : `{"error": "Commande introuvable"}`).
-- **Preuve** : `public/index.php:8-47` — pas de bloc `try/catch` global ; fallback ligne 16-19 ; fusion ligne 27 ; `CAHIER_RECETTE.md` section 4.3 décrit le cas fichier absent.
+- **Contrat du endpoint `/version` — trois cas mutuellement exclusifs** :
+  - **Cas 1 — Fichier `deployed-version.json` absent (local)** : 
+    - **Code** : `public/index.php:16-19` fallback vers `['sha' => null, 'ref' => null, 'deployedAt' => null]`
+    - **Résultat** : `{"sha": null, "ref": null, "deployedAt": null, "schemaVersion": <N>}` où `<N>` est la version lue en base en temps réel.
+    - **Clé `environnement`** : **Absente du JSON** (pas créée par le fallback).
+    - **HTTP** : 200 OK (JSON valide produit).
+  - **Cas 2 — Fichier présent et JSON valide** :
+    - **Code** : `public/index.php:17-18` décode le fichier, `json_decode()` retourne un tableau associatif.
+    - **Résultat** : Tous les champs du fichier sont présents (ex: `sha`, `ref`, `environnement`, `deployedAt`), augmentés en ligne 27 par `$version + ['schemaVersion' => <N>]`.
+    - **HTTP** : 200 OK (JSON complètement peuplé).
+  - **Cas 3 — Fichier présent mais JSON invalide ou malformé** :
+    - **Code** : `public/index.php:18` `json_decode()` retourne `null` (JSON invalide). Ligne 27 exécute `$version + [...]` où `$version` est `null`.
+    - **Erreur** : PHP lève une `TypeError` : « Unsupported operand type(s) for +: null and array » (opérateur `+` non défini pour null).
+    - **Résultat** : Aucun JSON d'erreur structuré. Réponse HTTP 500 sans corps, ou body = stack PHP brut (dépend de `display_errors` en production).
+    - **Implication métier** : Erreur grave — indique un fichier `deployed-version.json` corrompu sur le serveur de déploiement.
+- **Gestion des erreurs globales** : Le routeur `public/index.php:11-47` n'enveloppe pas `Db::connect()` (ligne 11) ni les appels Orders/Db dans un bloc `try/catch` global. Toute exception PDO (base indisponible, requête invalide, typage incompatible avec `+`, etc.) s'échappe sans interception — aucun JSON d'erreur structuré n'est produit, la réponse dépend de la config serveur. Seul le cas `/orders/{id}` absent produit un JSON d'erreur : `{"error": "Commande introuvable"}` (ligne 39).
+- **Preuve** : `public/index.php:8-47` — pas de bloc `try/catch` global ; cas 1 (fallback) lignes 16-19 ; cas 2 (fusion) ligne 27 ; cas 3 (TypeError) impossibilité de `null + array` ; `CAHIER_RECETTE.md` section 4.3 décrit le cas fichier absent.
 
 #### Règle 4.2 : Si un déploiement échoue (tests, migrations), la version servie reste inchangée
 - **Énoncé** : Un merge qui provoque une sortie non-zéro du CI (test rouge, migration échoue, push rejeté) ne produit **aucune nouvelle version** sur la branche `deployed`.
@@ -178,12 +189,15 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 
 ## Questions ouvertes et limites
 
-### Chaînon manquant : `deployed-version.json` sur l'hôte
-- **Problème** : `deploy.yml` publie `deployed/<env>/version.json` sur la branche `deployed`, mais aucune étape du workflow ne copie ce fichier à la racine du projet servi (où `public/index.php:16-19` le lit en tant que `deployed-version.json`).
+### Chaînon manquant : `deployed-version.json` sur l'hôte et validité du JSON
+- **Problème structurel** : `deploy.yml` publie `deployed/<env>/version.json` sur la branche `deployed`, mais aucune étape du workflow ne copie ce fichier à la racine du projet servi (où `public/index.php:16-19` le lit en tant que `deployed-version.json`). De plus, le code de `public/index.php` n'effectue **aucune validation** du JSON décodé avant de l'utiliser dans l'opérateur `+` (ligne 27).
 - **Impact sur `/version`** : 
-  - Si `deployed-version.json` est absent du disque (cas nominal local) : `/version` retourne `{"sha": null, "ref": null, "deployedAt": null, "schemaVersion": <N>}` où `<N>` est la version réelle en base. Les trois champs nuls indiquent un problème de déploiement du fichier, pas une absence de déploiement du code. **La clé `environnement` est absente du JSON** (pas présente en tant que `null`). Le service répond HTTP 200 avec un JSON valide.
-  - Si `deployed-version.json` contient du JSON invalide ou malformé : `json_decode` retourne `null`, puis `public/index.php:27` lève une `TypeError` (« Unsupported operand type(s) for +: null and array »), ce qui produit un HTTP 500 sans réponse JSON structurée. Les consommateurs de l'API reçoivent une erreur serveur non documentée.
-- **Résolution** : Hors ce dépôt — à documenter côté production (webhook, script serveur, ou mécanisme de dépôt de fichiers entre la branche `deployed` et l'hôte servi).
+  - **Cas 1 — Fichier absent (nominal local)** : Fallback PHP retourne `{"sha": null, "ref": null, "deployedAt": null, "schemaVersion": <N>}` sans clé `environnement`. Réponse HTTP 200 valide. Les trois champs nuls indiquent un problème de déploiement du fichier, pas une absence de déploiement du code.
+  - **Cas 2 — Fichier présent et JSON valide (production nominale)** : Tous les champs décodés sont fusionnés avec `schemaVersion`. Réponse HTTP 200.
+  - **Cas 3 — Fichier présent mais JSON invalide ou malformé (ERREUR GRAVE)** : `json_decode()` retourne `null`. La ligne 27 (`$version + [...]`) lève une `TypeError` : « Unsupported operand type(s) for +: null and array ». Le service répond HTTP 500 sans JSON structuré. **Blocage complet du endpoint `/version`**. Les consommateurs de l'API reçoivent une erreur serveur non documentée.
+- **Résolution** : 
+  - Côté CI/CD (hors dépôt) : Documenter le mécanisme de copie de `deployed/<env>/version.json` vers la racine du projet servi (webhook, script serveur, rsync, ou dépôt d'artefact).
+  - Côté robustesse (dans le dépôt) : Ajouter une validation PHP du JSON après décodage (ex: `if (!is_array($version))`) avant l'opérateur `+`, ou envelopper le tout dans un `try/catch`. **À implémenter avant la montée en production sur données réelles**.
 
 ### Versioning de `data/app.db` et migrations futures
 - **Question** : Après chaque nouvelle migration, doit-on mettre à jour et committer `data/app.db` dans le dépôt, ou appliquer les migrations à chaque déploiement contre la base « de départ » versionnée ?
