@@ -10,19 +10,26 @@
 - **Confiance** : haute pour le pipeline CI et la publication sur la branche `deployed` (`deploy.yml` entier vérifié) — déploiement effectivement servi sur l'hôte : **INCONNU** (hors dépôt)
 - **Justification** : `.github/workflows/deploy.yml` lu intégralement. README (sections « Les deux canaux », « Version servie ») lu. Branche `origin/deployed` inspectée (deux fichiers `production/version.json` et `staging/version.json`, tous deux à `schemaVersion: 1` — `VÉRIFIÉ_CODE` dans la carte des domaines). Commit `da34e1e` référencé (correction du bug d'écrasement inter-environnements). Le déploiement effectif sur l'hôte servi (alimentation de `deployed-version.json`) est hors dépôt et ne peut être prouvé par ce seul dépôt.
 
-## ⚠️ Distinction critique : CI vs Déploiement
+## ⚠️ Distinction critique : CI vs Déploiement — workflows indépendants
 
-**Deux workflows GitHub Actions distincts orchestrent le pipeline — ne pas les confondre** :
+**Deux workflows GitHub Actions distincts orchestrent le pipeline — déclenchés séparément, jamais l'un en dépendance de l'autre** :
 
 | Aspect | `ci.yml` (CI) | `deploy.yml` (Déploiement) |
 |--------|---------------|-------------------------|
-| **Déclencheur** | Chaque `push` sur `main`/`staging` + chaque PR | Chaque `push` sur `main`/`staging` seulement |
+| **Déclencheur exact** | `push` sur `main`/`staging` **OU** `pull_request` (tout événement PR) | `push` sur `main`/`staging` seulement |
+| **Exécution sur PR** | ✓ Exécuté (seul workflow à la déclencher) | ✗ Jamais déclenché sur PR |
+| **Exécution sur push** | ✓ Déclenché en parallèle (indépendant) | ✓ Déclenché en parallèle (indépendant) |
 | **Étapes** | 1. Essai à blanc des migrations 2. Tests PHPUnit | 1. Tests PHPUnit 2. Migrations réelles 3. Publier `version.json` |
 | **Effet disque** | Aucun (dry-run seulement) | Modifie `data/app.db` (en CI, éphémère) ; publie sur branche `deployed` |
 | **Sortie artefact** | Logs console uniquement | Fichier `deployed/<env>/version.json` persisté sur branche `deployed` |
-| **Rôle** | Vérification précoce — donne un signal sur la santé des migrations | Publication de la version vérifiée en tant que source de vérité |
+| **Rôle** | Vérification précoce — signal de santé migrations + tests sur tout code | Publication de la version vérifiée en tant que source de vérité |
 
-**Conséquence** : Un développeur qui pousse sur une PR (déclenche `ci.yml`) voit le résultat du dry-run et des tests mais **aucune publication ne se fait** — le workflow ne produit aucun artefact de déploiement. Seuls les pushes réels sur les branches (déclenche `deploy.yml`) produisent une version publiée. Cela protège contre les « déploiements accidentels » d'une branche de feature testée.
+**Trois scénarios de déclenchement** :
+1. **Créer une PR** (push branche feature) → `ci.yml` seul. Pas de `deploy.yml`. Vérification, zéro publication.
+2. **Pousser sur `staging` directement** (merge ou direct push) → `ci.yml` ET `deploy.yml` en parallèle. Tous deux s'exécutent indépendamment, sans interdépendance. `ci.yml` affiche logs ; `deploy.yml` publie sur `deployed/staging/version.json`.
+3. **Pousser sur `main`** → `ci.yml` ET `deploy.yml` en parallèle, même isolation. `deploy.yml` publie sur `deployed/production/version.json`.
+
+**Protection clé** : Un développeur qui teste sur une PR voit le signal du `ci.yml` (dry-run + tests) mais **zéro publication ne se fait** — `deploy.yml` ne tourne jamais sur une PR. Cela protège contre les « déploiements accidentels » avant un merge réel. La version servie reste celle de la publication précédente.
 
 ## Objectif
 Publier, après chaque push sur `main` ou `staging` et uniquement si la suite de tests passe, un fichier `version.json` sur la branche `deployed`. Ce fichier est la **source de vérité de la version publiée sur la branche `deployed`** : il porte le SHA déployé, l'environnement, la version de schéma appliquée et l'horodatage. Le mécanisme qui dépose ensuite ce fichier sur l'hôte servi est **hors dépôt** — seule la branche `deployed` est prouvée par ce workflow. Si le workflow échoue (tests rouges, migration échoue, push rejeté), le fichier reste celui du déploiement précédent — un merge ne produit donc **pas** automatiquement une nouvelle version sur la branche `deployed`.

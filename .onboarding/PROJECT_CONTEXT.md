@@ -35,14 +35,18 @@
 - **`main`** (branche `main`) : production. Promotion manuelle depuis `staging` — geste **hors chaîne d'agents**. Maintenance et Production préparent, vérifient et **passent la main**.
 - **Confondre les deux = l'échec que ce dépôt sert à détecter.**
 
-### 2. Version servie ne se déduit jamais du code
-Le workflow `deploy.yml` écrit un `version.json` lisible publiquement après chaque push réussi sur `staging` ou `main` :
-- `deployed/staging/version.json` (après push sur `staging`)
-- `deployed/production/version.json` (après push sur `main`)
+### 2. Version servie : deux fichiers distincts, l'un publié, l'autre servi
+**Distinction critique** :
+- **Artefact publié** : `deploy.yml` écrit un `version.json` sur la branche Git `deployed` après chaque push réussi (source de vérité du CI/CD) :
+  - `deployed/staging/version.json` (après push sur `staging`)
+  - `deployed/production/version.json` (après push sur `main`)
+- **Fichier servi** : `public/index.php` lit `deployed-version.json` depuis le disque du serveur hébergé (source de vérité de la version **réellement servie**).
+
+**Ces deux fichiers ne sont pas le même.** `deployed-version.json` doit être alimenté par un mécanisme externe (webhook, script serveur, hébergeur) qui copie de `deployed/<env>/version.json` (branche) vers `deployed-version.json` (disque servi).
 
 Champs : `sha`, `ref`, `environnement`, `schemaVersion` (lu en base post-migration), `deployedAt` (UTC).
 
-**Si un déploiement n'aboutit pas (tests rouges, migration échoue), ce fichier reste inchangé** — l'absence de nouvelle version se voit.
+**Si un déploiement n'aboutit pas** (tests rouges, migration échoue), le fichier `deployed/<env>/version.json` sur la branche reste inchangé — l'absence de nouvelle version se voit. Ce qui est servi sur l'hôte dépend de si/quand `deployed-version.json` a été copié (hors dépôt).
 
 ### 3. Persistance par migration, pas par mise à jour manuelle
 - `data/app.db` est **versionné** — état de départ des migrations.
@@ -50,11 +54,10 @@ Champs : `sha`, `ref`, `environnement`, `schemaVersion` (lu en base post-migrati
 - Chaque migration s'exécute dans sa propre transaction ; une sauvegarde horodatée est créée obligatoirement avant toute exécution.
 - En CI (`deploy.yml`), les migrations sont appliquées mais **pas commitées dans le dépôt** — `data/app.db` reste l'état « avant migrations » à chaque checkout.
 
-### 4. Chaînon manquant : `deployed-version.json` sur l'hôte servi
-- `deploy.yml` publie sur la branche `deployed` (hors code source).
-- `public/index.php` lit un fichier `deployed-version.json` à la racine du projet servi.
-- **Le mécanisme qui copie de `deployed/<env>/version.json` à `deployed-version.json` sur l'hôte n'est pas dans ce dépôt.** Ce maillon est **hors dépôt** (hébergement, webhook, script serveur).
-- Sans ce maillon, `/version` renvoie des champs `sha`/`ref`/`deployedAt` à `null`.
+### 4. Infrastructure de déploiement : le chaînon manquant
+- Tout ce dépôt peut prouver : `deploy.yml` publie `deployed/<env>/version.json` sur la branche `deployed`.
+- **Hors dépôt** : le mécanisme qui alimente `deployed-version.json` sur l'hôte servi (hébergement, webhook, script serveur, mécanism de fichiers).
+- Conséquence : `/version` renvoie des champs `sha`/`ref`/`deployedAt` à `null` si ce maillon n'est pas mis en place côté production.
 
 ### 5. Fragmentation de la couverture de test
 - **Tests présents** : couche Orders (`tests/OrdersTest.php`) — cas nominaux des quatre endpoints.

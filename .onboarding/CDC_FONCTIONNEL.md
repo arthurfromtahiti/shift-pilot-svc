@@ -124,7 +124,7 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 #### Règle 4.1 : La version servie ne se déduit jamais du code
 - **Énoncé** : La version **vraiment** déployée est celle enregistrée dans `deployed/<env>/version.json` sur la branche `deployed`, jamais supposée depuis le code ou les constantes.
 - **Corollaire** : Le champ `schemaVersion` dans le JSON est lu **en base après migration**, pas supposé depuis le nom du fichier de migration.
-- **Contrat du endpoint `/version`** : Celui-ci retourne un JSON avec les champs `sha`, `ref`, `environnement`, `schemaVersion`, `deployedAt`. Si le fichier `deployed-version.json` est absent du disque, les champs `sha`, `ref`, `deployedAt` sont `null` (valeurs par défaut en PHP) ; `schemaVersion` est toujours lu en base en temps réel. Si le fichier est présent mais contient du JSON invalide, le comportement est détérioré : `json_decode` retourne `null`, la fusion échoue.
+- **Contrat du endpoint `/version`** : Celui-ci retourne un JSON avec les champs `sha`, `ref`, `environnement`, `schemaVersion`, `deployedAt`. Si le fichier `deployed-version.json` est absent du disque, les champs `sha`, `ref`, `deployedAt` sont `null` (valeurs par défaut en PHP) ; `schemaVersion` est toujours lu en base en temps réel. **Si le fichier est présent mais contient du JSON invalide**, `json_decode` retourne `null`, et la ligne 27 de `public/index.php` (`json_encode($version + [...])`) lève une `TypeError` : « Unsupported operand type(s) for +: null and array ». Le service renvoie HTTP 500 sans contenu utile.
 - **Preuve** : `public/index.php:16-19` — lecture du `deployed-version.json` côté serveur avec valeur par défaut si absent ; `.github/workflows/deploy.yml:46` — `php -r '... App\Db::schemaVersion(...)'` lu post-migration.
 
 #### Règle 4.2 : Si un déploiement échoue (tests, migrations), la version servie reste inchangée
@@ -168,8 +168,8 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 ### Chaînon manquant : `deployed-version.json` sur l'hôte
 - **Problème** : `deploy.yml` publie `deployed/<env>/version.json` sur la branche `deployed`, mais aucune étape du workflow ne copie ce fichier à la racine du projet servi (où `public/index.php:16-19` le lit en tant que `deployed-version.json`).
 - **Impact sur `/version`** : 
-  - Si `deployed-version.json` est absent du disque : `/version` retourne `{"sha": null, "ref": null, "environnement": null, "schemaVersion": <N>, "deployedAt": null}` où `<N>` est la version réelle en base. Les trois champs nuls indiquent un problème de déploiement du fichier, pas une non-déploiement du code.
-  - Si `deployed-version.json` contient du JSON invalide ou malformé : le comportement est détérioré — `json_decode` retourne `null`, la fusion échoue, réponse non garantie.
+  - Si `deployed-version.json` est absent du disque : `/version` retourne `{"sha": null, "ref": null, "environnement": null, "schemaVersion": <N>, "deployedAt": null}` où `<N>` est la version réelle en base. Les trois champs nuls indiquent un problème de déploiement du fichier, pas une non-déploiement du code. Le service répond HTTP 200 avec un JSON valide.
+  - Si `deployed-version.json` contient du JSON invalide ou malformé : `json_decode` retourne `null`, puis `public/index.php:27` lève une `TypeError` (« Unsupported operand type(s) for +: null and array »), ce qui produit un HTTP 500 sans réponse JSON. Les consommateurs de l'API reçoivent une erreur serveur non documentée.
 - **Résolution** : Hors ce dépôt — à documenter côté production (webhook, script serveur, ou mécanisme de dépôt de fichiers entre la branche `deployed` et l'hôte servi).
 
 ### Versioning de `data/app.db` et migrations futures

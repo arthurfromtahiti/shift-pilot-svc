@@ -230,7 +230,7 @@ rm -rf /tmp/shift-pilot-test
   ```bash
   curl http://127.0.0.1:8080/version
   ```
-  Réponse attendue : `null` ou `{"sha":null,"ref":null,...}` (fichier n'existe pas en local, comportement attendu).
+  Réponse attendue : HTTP 200 avec `{"sha":null,"ref":null,"environnement":null,"schemaVersion":1,"deployedAt":null}` (fichier n'existe pas en local, comportement nominal). **Attention** : si le fichier existait mais contenait du JSON invalide, la réponse serait HTTP 500 (le code lève une `TypeError` en tentant de fusionner `null` et un tableau).
 
 - [ ] **4.4** : `/orders` — tableau JSON des 5 commandes
   ```bash
@@ -303,14 +303,16 @@ rm -rf /tmp/shift-pilot-test
   git push origin --delete test/staging-recette
   ```
 
-### Étape 5.2 — Vérifier la publication sur `deployed`
+### Étape 5.2 — Vérifier la publication sur la branche `deployed` (artefact Git, pas le fichier servi)
+
+**⚠️ Important** : Cette étape valide que `deploy.yml` a **écrit** `deployed/<env>/version.json` sur la branche Git `deployed`. **Ce n'est pas le fichier que le code lit en production** (`public/index.php` lit `deployed-version.json` sur le disque du serveur). Le lien entre ces deux fichiers est hors dépôt (copie par webhook, script, ou mécanisme hébergement).
 
 - [ ] **5.2.1** : Récupérer la branche `deployed`
   ```bash
   git fetch origin deployed
   ```
 
-- [ ] **5.2.2** : Lire la version publiée pour `staging`
+- [ ] **5.2.2** : Lire la version publiée pour `staging` (Git artefact)
   ```bash
   git show origin/deployed:staging/version.json
   ```
@@ -320,7 +322,7 @@ rm -rf /tmp/shift-pilot-test
   ```bash
   git show origin/deployed:production/version.json
   ```
-  Comparer les `deployedAt` des deux fichiers — ils ne doivent pas être identiques (timestamps distincts).
+  Comparer les `deployedAt` des deux fichiers — ils ne doivent pas être identiques (timestamps distincts). Cela confirme l'isolation des deux canaux.
 
 ---
 
