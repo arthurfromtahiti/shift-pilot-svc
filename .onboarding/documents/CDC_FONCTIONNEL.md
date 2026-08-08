@@ -18,11 +18,11 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 ### Opérateurs internes
 - **Développeur** : Clone le dépôt, exécute `composer test` et `composer migrate:dry` localement. Peut créer des branches de test et pousser sur `staging`. Le déploiement se déclenche automatiquement via CI/CD après le push.
 - **Agent CI/CD** (GitHub Actions) : Exécute les tests, applique les migrations (`composer migrate`), publie la version sur la branche `deployed`. Automatisé, pas d'intervention manuelle.
-- **Promoteur staging → main** : Mentionné dans README comme un geste manuel, mais **rôle et autorisations ne sont pas configurés dans le dépôt fourni**. La garantie repose sur la discipline procédurale.
+- **Promoteur staging → main** : Documenté comme effectuant un geste manuel (merge/push vers `main`), mais **le rôle, les permissions et les contrôles d'accès ne sont pas configurés dans le dépôt fourni**. Aucune branch protection ni autorisation GitHub n'est visible.
 
 ### Systèmes
-- **GitHub Actions** : Orchestre CI/CD, exécute les migrations en isolation (`ubuntu-latest`), pousse sur `deployed`. Déclenchement : push sur `main` ou `staging`.
-- **Serveur web** : Héberge la version servie. **Note** : L'enregistrement des appels API n'est pas implémenté dans le code fourni (`public/index.php` n'a pas de logging). Le dépôt ne documente pas ce mécanisme.
+- **GitHub Actions** : Orchestre CI/CD, exécute les migrations en isolation (`ubuntu-latest`), publie la version sur la branche `deployed`. Déclenchement : push sur `main` ou `staging`.
+- **Serveur web** : Héberge la version servie. **Note** : Le code fourni (`public/index.php`) n'implémente **pas** d'enregistrement des appels API — aucun log structuré des requêtes HTTP n'est produit par le service lui-même. Le dépôt ne fournit pas de mécanisme de logging des requêtes (pas de middleware, pas de syslog).
 
 ---
 
@@ -56,8 +56,14 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 
 #### Règle 1.3 : Schéma JSON de chaque commande — champs et types
 - **Énoncé** : Chaque commande en base porte les champs `id` (INTEGER), `client` (TEXT), `montant_cents` (INTEGER), `devise` (TEXT, défaut 'XPF'), `statut` (TEXT). Tous obligatoires en base.
-- **Ce qui est prouvé** : Jeu de données `001_init.sql` définit les 5 lignes ; `src/Orders.php:15,20` récupère les champs via SELECT ; tests `OrdersTest.php::testMontantsStockesEnCentimesEntiers()` et `testTrouveUneCommandeParIdentifiant()` vérifient les types en couche Orders (pas HTTP).
-- **Ce qui n'est pas prouvé** : Le codes HTTP de réussite (nominalement 200), la structure HTTP de la réponse (nominalement JSON valide au format attendu), et les codes d'erreur HTTP (`public/index.php` n'est pas couvert par la suite de test). Ces comportements sont accessibles via recette manuelle (voir `CAHIER_RECETTE.md`), pas par une suite automatisée.
+- **Ce qui est prouvé** : 
+  - **Schéma de données** : `001_init.sql` définit les 5 lignes avec les champs et types.
+  - **Couche métier** : `src/Orders.php:15,20` récupère exactement ces champs via SELECT.
+  - **Couche test** : Cinq tests PHPUnit (`OrdersTest.php`) couvrent les méthodes `all()` et `find()` de la couche Orders en vérifiant les types de retour et montants en centimes entiers.
+- **Ce qui n'est pas prouvé** : 
+  - **Codes HTTP de réussite** : La suite de tests ne couvre pas `public/index.php` — aucune preuve automatisée que les codes HTTP 200 sont retournés.
+  - **Format JSON produit** : Les tests couvrent la couche Orders, pas la sérialisation JSON du routeur (`json_encode()` en `public/index.php:45`).
+  - **Codes HTTP d'erreur (404)** : Le code 404 pour un ID absent est implémenté (`public/index.php:39`), mais aucune preuve automatisée. Vérifiable via recette manuelle (`CAHIER_RECETTE.md:4.6`).
 
 ---
 
@@ -67,29 +73,30 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 **Déclencheur** : Push sur `staging` ou `main`  
 **Résultat** : Code exécuté sur le serveur, version enregistrée sur `deployed`
 
-#### Règle 2.1 : Isolation staging/production sur la branche Git `deployed`
+#### Règle 2.1 : Isolation staging/production — artefact Git (`deployed` branche)
 - **Énoncé** : Un push sur `staging` ne doit jamais modifier `deployed/production/version.json` sur la branche Git `deployed`. Les deux environnements restent isolés **au niveau du dépôt**.
-- **Garantie limitée à Git** : Cette isolation s'applique à l'artefact Git (`deployed/<env>/version.json` sur la branche `deployed`). Le fichier sur le serveur web (`deployed-version.json` à la racine du projet servi) dépend du script d'hébergement — voir « Questions ouvertes ».
+- **Champ d'application** : Cette garantie s'applique **uniquement à l'artefact Git** (`deployed/<env>/version.json` sur la branche `deployed`). Le fichier sur le serveur web (`deployed-version.json` à la racine du projet servi) est **hors dépôt** — voir « Questions ouvertes ».
 - **Mécanisme** : Deux fichiers de version distincts (`deployed/staging/version.json` et `deployed/production/version.json`) coexistent sur la branche `deployed` sans jamais s'écraser.
 - **Règle de pipeline** : La branche cible du `version.json` est déterminée par `github.ref_name` — une variable immuable du déclencheur Git (`main` → `production`, autres branches → `staging`).
 - **Preuve** : `.github/workflows/deploy.yml:38-41` — expression GitHub Actions `github.ref_name == 'main' && 'production' || 'staging'` ; `mkdir -p "$CIBLE"` isole les répertoires ; commit da34e1e (correction du bug d'écrasement inter-environnements).
 
-#### Règle 2.2 : Publication conditionnelle à la suite verte (artefact Git)
+#### Règle 2.2 : Publication conditionnelle à la suite verte — artefact Git (`deployed` branche)
 - **Énoncé** : Si la suite de tests échoue, aucune nouvelle version n'est publiée sur la branche `deployed` ; l'artefact Git précédent reste inchangé.
-- **Garantie limitée à Git** : Cette garantie s'applique à la branche `deployed`. L'état du fichier serveur (`deployed-version.json`) dépend du script d'hébergement — voir « Questions ouvertes ».
+- **Champ d'application** : Cette garantie s'applique **uniquement à l'artefact Git** sur la branche `deployed`. L'état du fichier serveur (`deployed-version.json`) est **hors dépôt** — voir « Questions ouvertes ».
 - **Mécanisme** : `composer test` (PHPUnit) s'exécute **avant** les migrations et la publication. Tout `exit` non-zéro arrête le workflow, empêchant le push sur `deployed`.
 - **Preuve** : `.github/workflows/deploy.yml:31-32` — ordre des étapes ; commentaire « Test avant publication ».
 
-#### Règle 2.3 : Chaque publication enregistre le SHA et l'horodatage réels
-- **Énoncé** : Le `version.json` publié porte le SHA du commit réel, l'environnement, et l'horodatage UTC de la publication.
-- **Données** : Champs `sha` (GitHub SHA), `ref` (branche git), `environnement` (`staging` ou `production`), `schemaVersion` (version en base), `deployedAt` (UTC).
-- **Preuve** : `.github/workflows/deploy.yml:44-64` — lecture du SHA depuis GitHub Actions, construction du JSON avec `date -u +%Y-%m-%dT%H:%M:%SZ`.
+#### Règle 2.3 : Chaque publication enregistre le SHA et l'horodatage de la branche `deployed`
+- **Énoncé** : Le `version.json` publié sur la branche `deployed` porte le SHA du commit source du merge, l'environnement, et l'horodatage UTC au moment du workflow.
+- **Données** : Champs `sha` (GitHub Actions `${{ github.sha }}`), `ref` (branche git, déduit de `github.ref_name`), `environnement` (`staging` ou `production`), `schemaVersion` (version lue en base au moment du déploiement CI), `deployedAt` (horodatage UTC généré par le workflow).
+- **Preuve** : `.github/workflows/deploy.yml:44-64` — `github.sha` en ligne 47, construction du JSON avec `date -u +%Y-%m-%dT%H:%M:%SZ` en ligne 63.
 
-#### Règle 2.4 : Promotion staging → production est un geste manuel (hors pipeline)
-- **Énoncé** : La promotion de `staging` vers `main` (et donc vers `production`) est documentée comme un geste manuel — aucun agent n'effectue automatiquement ce push.
-- **Geste documenté** : README.md évoque la promotion ; la branche `main` nécessite un merge/push intentionnel.
-- **Limitation** : Aucun contrôle d'accès (branch protection, permissions GitHub) n'est visible dans le dépôt fourni pour **forcer** cette manualité ; la garantie repose sur la discipline procédurale, pas sur la technique.
-- **Preuve** : `.github/workflows/deploy.yml:11` énumère `[main, staging]` comme branches déclencheurs — à contrario, aucune branche de test n'apparaît.
+#### Règle 2.4 : Promotion staging → production — procédure manuelle documentée
+- **Énoncé** : La promotion de `staging` vers `main` (et donc vers `production`) est une étape manuelle — aucun agent CI/CD n'effectue automatiquement ce push.
+- **Geste documenté** : README.md mentionne la promotion ; le merge de `staging` vers `main` requiert une action intentionnelle (GitHub PR, merge local, ou push direct selon les permissions).
+- **Limitation technique** : **Aucun contrôle d'accès au dépôt** (branch protection, règles GitHub) n'est visible dans les fichiers fournis pour **forcer** cette manualité. La séparation entre `staging` et `main` repose uniquement sur la **discipline procédurale**, pas sur une barrière technique.
+- **Risque** : Un développeur ou un agent pourrait potentiellement pousser sur `main` sans passer par `staging`, déclenchant le déploiement de `production` en contournant la procédure.
+- **Preuve** : `.github/workflows/deploy.yml:11` énumère `[main, staging]` comme branches déclencheurs — les deux déclenche le workflow sans distinction de protocole.
 
 ---
 
@@ -137,7 +144,12 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 
 #### Règle 4.1 : Artefact Git (branche `deployed`) vs fichier serveur — deux domaines distincts
 - **Énoncé** : La source de vérité Git (`deployed/<env>/version.json` sur la branche `deployed`) est toujours **publiée** par le workflow CI/CD après un merge réussi. Le fichier à la racine du serveur (`deployed-version.json`, qui contient également `schemaVersion`) est **hors périmètre du dépôt** — sa présence et son contenu dépendent du script d'hébergement.
-- **Corollaire du champ `schemaVersion`** : Le champ est **lu en temps réel en base** par `Db::schemaVersion($pdo)`, puis ajouté au tableau du fichier par l'opérateur `+` de PHP. **La priorité est celle du tableau gauche** : si le fichier `deployed-version.json` décodé contient déjà `schemaVersion`, la valeur du fichier est **conservée** (l'opérateur `+` préserve les clés du premier opérande). Si absent du fichier, la valeur de la base est ajoutée.
+- **Champ `schemaVersion` — publication et priorité** : 
+  - **À la publication** (`.github/workflows/deploy.yml:61`) : Le workflow écrit `"schemaVersion": $SCHEMA` dans l'artefact Git `deployed/<env>/version.json`, où `$SCHEMA` est la version lue en base **au moment du déploiement**.
+  - **À la lecture** (`public/index.php:27`) : Le code exécute `$version + ['schemaVersion' => Db::schemaVersion($pdo)]`. **L'opérateur `+` préserve les clés du tableau gauche** (`$version` = contenu décodé du fichier `deployed-version.json`).
+    - **Si le fichier contient déjà `schemaVersion`** : La valeur du fichier est **conservée** (pas écrasée par la base).
+    - **Si le fichier n'a pas `schemaVersion`** : La valeur live de la base est ajoutée en fallback.
+  - **Implication** : En cas nominal (fichier pré-peuplé par le workflow), le `schemaVersion` reste celui du déploiement, pas la base courante. C'est voulu — il traçe la version qui **a été déployée**, pas la version live à chaque requête.
 - **Contrat du endpoint `/version` — trois cas mutuellement exclusifs** :
   - **Cas 1 — Fichier `deployed-version.json` absent (nominal local)** : 
     - **Code** : `public/index.php:16-19` fallback vers `['sha' => null, 'ref' => null, 'deployedAt' => null]`
@@ -186,8 +198,8 @@ Service HTTP de lecture seule exposant un modèle de commandes persistées en SQ
 - État initial : 5 commandes fictives insérées par `001_init.sql` au démarrage (Heiata, Teiki, Manoa, Vaite, Moana).
 - Pas de suppression, pas de mise à jour, pas d'insertion via l'API — ensemble immuable une fois déployé.
 - **Cycle** : Insertion en base (migration `001_init.sql`) → persistance jusqu'à nouvel ordre. 
-  - **Rollback de la migration courante** : Prouvé par le mécanisme transactionnel de `bin/migrate.php:62-76` (un bloc `BEGIN/ROLLBACK` isole chaque migration).
-  - **Restauration après déploiement** : Une sauvegarde horodatée est créée obligatoirement (preuve : `bin/migrate.php:50-59`), mais la procédure complète de restauration (copie du backup sur `data/app.db` + vérification + test) n'est que manuelle, hors chaîne d'agents automatisés.
+  - **Annulation de la migration courante (rollback transactionnel)** : Prouvé par le mécanisme transactionnel de `bin/migrate.php:62-76` (un bloc `BEGIN/ROLLBACK` isole chaque migration). Si une migration échoue, seule cette migration est annulée ; les migrations précédentes restent appliquées.
+  - **Restauration d'une sauvegarde antérieure** : Une sauvegarde horodatée est créée obligatoirement **avant** toute application (preuve : `bin/migrate.php:50-59`). La procédure complète de restauration (copie manuelle du backup vers `data/app.db` + redémarrage + vérification) n'est pas automatisée — elle relève de l'intervention opérationnelle manuelle.
 
 **Absence de contraintes métier**:
 - Pas de contrainte UNIQUE sur `email` (doublons possibles).
@@ -258,11 +270,12 @@ Voir `DATA_MODEL_AUDIT.md` — schéma SQLite, absent de contraintes, cycle de v
 - `.onboarding/workflows/WORKFLOW_DEPLOIEMENT.md` — deux canaux, publication version.json
 - `.onboarding/audits/FUNCTIONAL_AUDIT.md` — endpoints, schéma JSON
 - `.onboarding/audits/TESTING_AUDIT.md` — couverture de test
-- `public/index.php` — routeur, endpoints
-- `src/Orders.php` — logique Orders
-- `bin/migrate.php` — application des migrations
-- `.github/workflows/ci.yml` — CI, dry-run, tests
-- `.github/workflows/deploy.yml` — publication, deux canaux
-- `migrations/001_init.sql` — schéma, données initiales
-- `README.md` — contexte, migrations, développement
-- `CAHIER_RECETTE.md` — test cases, section 5.1 (base indisponible), section 5.2 (JSON corrompu)
+- `public/index.php` — routeur, endpoints, `/version`, fusion de version.json
+- `src/Orders.php` — logique Orders, requêtes `SELECT`
+- `bin/migrate.php` — application des migrations, sauvegarde, transactions
+- `.github/workflows/ci.yml` — CI, dry-run des migrations, tests
+- `.github/workflows/deploy.yml` — publication sur branche `deployed`, deux canaux, horodatage
+- `migrations/001_init.sql` — schéma, données initiales (5 commandes)
+- `tests/OrdersTest.php` — 5 tests PHPUnit couvrant Orders
+- `README.md` — contexte, migrations, développement local
+- `CAHIER_RECETTE.md` — plan de recette avec 6 phases

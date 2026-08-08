@@ -24,6 +24,7 @@ Valider les quatre scénarios critiques du service shift-pilot-svc :
 - [ ] PHP 8.1+ installé (`php --version`)
 - [ ] Composer installé (`composer --version`)
 - [ ] Git configuré (`git config user.name`, `git config user.email`)
+- [ ] SQLite CLI (`sqlite3 --version`) — utilisé en Phase 2 pour vérifier l'état de la base
 - [ ] Accès GitHub Actions lisible (pas d'API token spécial requis pour lire les logs)
 
 ### Dépôt local
@@ -39,7 +40,7 @@ Valider les quatre scénarios critiques du service shift-pilot-svc :
 
 ### Isolation des phases destructrices
 
-Pour les phases 2 et 5, **créer un répertoire de test isolé** :
+Pour les phases 2 et 5, **créer un répertoire de test isolé avec une base vierge** :
 
 ```bash
 # À exécuter UNE FOIS avant la recette
@@ -49,6 +50,10 @@ git clone https://github.com/<org>/shift-pilot-svc.git
 cd shift-pilot-svc
 git remote add productif https://github.com/<org>/shift-pilot-svc.git
 
+# Préparer une base de test vierge
+rm -f data/app.db
+mkdir -p data/backups
+
 # À partir d'ici, vous travaillez dans /tmp/shift-pilot-test/shift-pilot-svc
 # Aucune opération ci-dessous ne modifie votre dépôt productif
 ```
@@ -57,6 +62,8 @@ git remote add productif https://github.com/<org>/shift-pilot-svc.git
 ```bash
 rm -rf /tmp/shift-pilot-test
 ```
+
+**Important — État initial** : La base `data/app.db` est supprimée. Elle sera reconstruite de zéro par `bin/migrate.php`, permettant de vérifier le processus complet d'initialisation. Si vous rencontrez une base déjà à schéma v1 (migration déjà appliquée), exécutez `rm -f data/app.db` pour recommencer.
 
 ---
 
@@ -110,21 +117,59 @@ rm -rf /tmp/shift-pilot-test
 
 **Environnement** : Clone isolé `/tmp/shift-pilot-test/shift-pilot-svc/`
 
+**⚠️ État initial critique** : Cette phase suppose que `data/app.db` est **vierge (v0)**. Le clone isolé supprime déjà la base au démarrage. **Avant chaque exécution d'une étape**, vérifiez que la base est bien à v0 :
+
+```bash
+cd /tmp/shift-pilot-test/shift-pilot-svc
+# Garantir que la base est vierge
+rm -f data/app.db
+# Puis exécuter l'étape
+```
+
+Si, en cours de Phase 2, une étape laisse la base à v1 (migration appliquée), vous **devez** réinitialiser avant la suivante :
+```bash
+rm -f data/app.db
+```
+
 ### Étape 2.1 — Essai à blanc
 
-- [ ] **2.1.1** : Dans le clone isolé, exécuter le dry-run
+**Note préalable : État initial vierge (v0)**
+
+**Avant de commencer l'étape 2.1**, garantissez que la base est vierge :
+
+```bash
+cd /tmp/shift-pilot-test/shift-pilot-svc
+# Vérifier explicitement et réinitialiser si nécessaire
+rm -f data/app.db
+# La base est maintenant vierge. Vérifier :
+php bin/migrate.php --dry-run
+```
+
+Le comportement attendu pour une base **vierge (v0)** est le contenu SQL de `001_init.sql` (création des tables, insertion des 5 commandes).
+
+**Cas de base déjà migrée (v1)** : Si `php bin/migrate.php --dry-run` affiche « Aucune migration à appliquer », cela signifie que `data/app.db` existe et est déjà à v1. Vous devez réinitialiser :
+
+```bash
+rm -f data/app.db
+```
+
+Puis recommencer à l'étape 2.1.1.
+
+- [ ] **2.1.1** : Dans le clone isolé, vérifier l'état initial de la base (vierge)
   ```bash
   cd /tmp/shift-pilot-test/shift-pilot-svc
+  # Vérifier qu'aucune base n'existe
+  test ! -f data/app.db && echo "✓ Base vierge" || echo "✗ Base existe déjà"
+  # Exécuter le dry-run
   php bin/migrate.php --dry-run
   ```
-  Vérifier : Affichage du contenu SQL de `001_init.sql` (création des tables, insertion des données). **Aucun fichier ne doit être modifié.**
+  Comportement attendu (base vierge v0) : Affichage du contenu SQL de `001_init.sql` (création des tables, insertion des 5 commandes).
 
-- [ ] **2.1.2** : Vérifier que `data/app.db` n'a pas changé
+- [ ] **2.1.2** : Vérifier que le dry-run n'a pas créé la base
   ```bash
-  ls -la data/app.db
-  # Noter l'horodatage
+  test ! -f data/app.db && echo "✓ Pas de base créée" || echo "✗ Base créée par le dry-run"
   ```
-  Ré-exécuter le dry-run, vérifier que l'horodatage de `data/app.db` n'a pas changé.
+  Le fichier `data/app.db` ne doit **pas** exister après le dry-run (essai à blanc ne modifie rien).
 
 ### Étape 2.2 — Application réelle avec sauvegarde
 
@@ -133,14 +178,23 @@ rm -rf /tmp/shift-pilot-test
   cd /tmp/shift-pilot-test/shift-pilot-svc
   php bin/migrate.php
   ```
-  Sortie attendue :
-  ```
-  Version de schéma courante : 0
-  À appliquer : migrations/001_init.sql
-  Sauvegarde obligatoire créée : data/backups/app-<YYYYMMDD-HHmmss>-avant-v1.db
-  [... application de la migration ...]
-  Version de schéma finale : 1
-  ```
+  Sortie attendue — **selon l'état de la base** :
+  
+  - **Si base à v0 (vierge)** :
+    ```
+    Version de schéma courante : 0
+    À appliquer : migrations/001_init.sql
+    Sauvegarde obligatoire créée : data/backups/app-<YYYYMMDD-HHmmss>-avant-v1.db
+    [... application de la migration ...]
+    Version de schéma finale : 1
+    ```
+  
+  - **Si base déjà à v1** :
+    ```
+    Version de schéma courante : 1
+    Aucune migration à appliquer
+    ```
+    (Aucune sauvegarde n'est créée car aucune migration n'est appliquée.)
 
 - [ ] **2.2.2** : Vérifier la sauvegarde a été créée
   ```bash
@@ -198,13 +252,23 @@ rm -rf /tmp/shift-pilot-test
   cd ~/shift-pilot-svc
   composer test
   ```
-  Sortie attendue : `Tests passed` (ou `OK` selon PHPUnit) avec 3+ tests verts.
+  Sortie attendue : `Tests passed` (ou `OK` selon PHPUnit) avec 5 tests verts.
 
-- [ ] **3.2** : Vérifier les tests passent les trois cas
+- [ ] **3.2** : Vérifier que tous les tests passent
   ```bash
-  composer test 2>&1 | grep -E "testGetAll|testGetById|testResponse"
+  composer test 2>&1
   ```
-  Chaque test doit être marqué comme PASS.
+  Sortie attendue : Résumé final indiquant 5 tests exécutés et tous marqués comme PASS/OK. Les 5 tests sont :
+  - `testListeToutesLesCommandes()` — Vérifie que `/orders` retourne 5 commandes
+  - `testTrouveUneCommandeParIdentifiant()` — Vérifie que `/orders/1` retourne la bonne commande
+  - `testIdentifiantInconnuRenvoieNull()` — Vérifie que `/orders/999` retourne `null`
+  - `testMontantsStockesEnCentimesEntiers()` — Vérifie que les montants sont en centimes (entiers)
+  - `testVersionDeSchemaLueEnBase()` — Vérifie que le schemaVersion est lu en base
+  
+  **Remarque** : La sortie PHPUnit complète inclut les noms, lignes, durée. Un simple grep sur les noms peut ne rien retourner si le formateur de sortie est différent. Vérifier plutôt le code de sortie et le nombre total de tests :
+  ```bash
+  composer test && echo "✓ Tests réussis"
+  ```
 
 ---
 
@@ -230,19 +294,26 @@ rm -rf /tmp/shift-pilot-test
   ```bash
   curl http://127.0.0.1:8080/version
   ```
-  Réponse attendue : HTTP 200 avec `{"sha":null,"ref":null,"environnement":null,"schemaVersion":1,"deployedAt":null}` (fichier n'existe pas en local, comportement nominal). **Attention** : si le fichier existait mais contenait du JSON invalide, la réponse serait HTTP 500 (le code lève une `TypeError` en tentant de fusionner `null` et un tableau).
+  Réponse attendue : HTTP 200 avec `{"sha":null,"ref":null,"deployedAt":null,"schemaVersion":1}` (fichier n'existe pas en local, comportement nominal — la clé `environnement` est absente, pas `null`). 
+  
+  **Attention — cas d'erreur grave** : Si le fichier existait mais contenait du JSON invalide ou malformé, `json_decode()` retournerait `null`, ce qui lèverait une `TypeError` à la ligne 27 de `public/index.php` en tentant de fusionner `null` et un tableau avec l'opérateur `+`. Le statut HTTP et le corps de la réponse dépendent alors de la configuration PHP de l'hôte (directives `display_errors`, `error_reporting`, mode CLI vs serveur web) : HTTP 500 sans JSON, HTML d'erreur PHP, ou stack trace brute. **Aucun JSON d'erreur structuré ne sera produit dans ce scénario.**
 
 - [ ] **4.4** : `/orders` — tableau JSON des 5 commandes
   ```bash
-  curl http://127.0.0.1:8080/orders | jq '.[0]'
+  curl http://127.0.0.1:8080/orders | jq .
   ```
-  Vérifier : Tous les champs présents (`id`, `client`, `montant_cents`, `devise`, `statut`). Exemple : `id: 1, client: "Heiata", montant_cents: 420000, devise: "XPF", statut: "payee"`.
+  Vérifier : Tableau contenant exactement 5 objets, chacun avec les champs `id`, `client`, `montant_cents`, `devise`, `statut`. Correspondance attendue avec `migrations/001_init.sql` :
+  - `id: 1, client: "Heiata", montant_cents: 420000, devise: "XPF", statut: "payee"`
+  - `id: 2, client: "Teiki", montant_cents: 180000, devise: "XPF", statut: "annulee"`
+  - `id: 3, client: "Manoa", montant_cents: 960000, devise: "XPF", statut: "payee"`
+  - `id: 4, client: "Vaite", montant_cents: 305000, devise: "XPF", statut: "payee"`
+  - `id: 5, client: "Moana", montant_cents: 75000, devise: "XPF", statut: "annulee"`
 
 - [ ] **4.5** : `/orders/1` — commande spécifique
   ```bash
-  curl http://127.0.0.1:8080/orders/1 | jq .id
+  curl http://127.0.0.1:8080/orders/1 | jq .
   ```
-  Réponse attendue : `1`
+  Réponse attendue : `{"id": 1, "client": "Heiata", "montant_cents": 420000, "devise": "XPF", "statut": "payee"}`
 
 - [ ] **4.6** : `/orders/999` — ID absent
   ```bash
@@ -260,7 +331,13 @@ rm -rf /tmp/shift-pilot-test
 
 **Environnement** : Dépôt GitHub, branche `staging`
 
-### Étape 5.1 — Créer une branche de test sur `staging`
+### Étape 5.1 — Créer une branche de test et la fusionner dans `staging`
+
+**⚠️ Important — Mécanisme des workflows** :
+- `ci.yml` se déclenche sur **les PRs** (indépendamment du push réel).
+- `deploy.yml` se déclenche **uniquement sur les `push` directs** vers `staging` ou `main`, **jamais sur les PRs**.
+
+Pour valider complètement le pipeline (CI + déploiement), nous devons fusionner la branche de test dans `staging` pour déclencher `deploy.yml`.
 
 - [ ] **5.1.1** : Synchroniser les branches locales
   ```bash
@@ -275,54 +352,116 @@ rm -rf /tmp/shift-pilot-test
   git checkout -b test/staging-recette
   ```
 
-- [ ] **5.1.3** : Faire un changement trivial (ne pas affecter le code fonctionnel)
+- [ ] **5.1.3** : Faire un changement trivial **temporaire** (ne pas affecter le code fonctionnel)
   ```bash
-  echo "# Test recette $(date +%s)" >> RECETTE.md
-  git add RECETTE.md
-  git commit -m "test(recette): validation pipeline staging"
+  # Créer un fichier temporaire explicite que vous nettoierez après
+  echo "# Test recette $(date +%s)" > .github/.test-pipeline-trigger
+  git add .github/.test-pipeline-trigger
+  git commit -m "test(recette): validation pipeline staging — fichier à nettoyer"
   ```
+  **Important** : Le fichier `.github/.test-pipeline-trigger` est créé **uniquement pour déclencher le workflow**. Il sera explicitement supprimé à l'étape 5.1.6 avant de fusionner dans `staging`. Cela garantit que `staging` reste clean après la recette.
 
-- [ ] **5.1.4** : Pousser la branche (non destructif, création branche de test)
+- [ ] **5.1.4** : Pousser la branche et observer les checks CI
   ```bash
   git push origin test/staging-recette
   ```
-  Aller sur GitHub et créer une PR vers `staging`. **Important : Cette PR n'est qu'une simulation, vous ne la fusionnerez pas.**
-
-- [ ] **5.1.5** : Observer les checks CI
+  Aller sur GitHub et créer une PR vers `staging`. 
+  
   Attendre que le workflow `ci.yml` se déclenche sur la PR :
   - Dry-run des migrations (`composer migrate:dry`)
   - Tests PHPUnit (`composer test`)
   - Tous les checks doivent être verts ✓
 
-- [ ] **5.1.6** : Annuler la PR (fermer sans fusionner)
+- [ ] **5.1.5** : Fusionner la branche dans `staging` (pour déclencher `deploy.yml`)
   ```bash
-  # Sur GitHub, cliquer "Close pull request"
-  # Localement :
+  # Sur GitHub : approuver et fusionner la PR ("Squash and merge" ou "Create a merge commit")
+  # OU en ligne de commande :
   git checkout staging
+  git pull origin staging
+  git merge test/staging-recette
+  git push origin staging
+  ```
+  
+  Le `push` vers `staging` déclenche **immédiatement** le workflow `deploy.yml`. Cela créera/mettra à jour `deployed/staging/version.json` sur la branche `deployed`.
+
+- [ ] **5.1.6** : **Avant de fusionner**, nettoyer la branche de test
+  ```bash
+  # Toujours sur la branche test/staging-recette
+  # Supprimer le fichier temporaire qui ne doit jamais arriver dans staging
+  rm .github/.test-pipeline-trigger
+  git add -u  # Stage la suppression
+  git commit --amend --no-edit  # Amend le commit précédent pour inclure la suppression
+  # OU créer un commit de nettoyage :
+  git commit -m "test(recette): nettoyer fichier temporaire"
+  ```
+  
+  Vérifier que le fichier `.github/.test-pipeline-trigger` n'existe **plus** localement :
+  ```bash
+  test ! -f .github/.test-pipeline-trigger && echo "✓ Fichier temporaire nettoyé"
+  ```
+  
+  Pousser la branche nettoyée :
+  ```bash
+  git push origin test/staging-recette
+  ```
+  
+  **Puis** fusionner dans `staging` (créer une PR sur GitHub, approuver et fusionner, ou fusionner en ligne de commande) :
+  ```bash
+  git checkout staging
+  git pull origin staging
+  git merge test/staging-recette
+  git push origin staging
+  ```
+  
+  **Enfin**, supprimer la branche de test :
+  ```bash
   git branch -D test/staging-recette
   git push origin --delete test/staging-recette
   ```
+  
+  Vérifier : La branche `test/staging-recette` n'existe plus, et le fichier `.github/.test-pipeline-trigger` n'existe pas dans `staging`.
 
 ### Étape 5.2 — Vérifier la publication sur la branche `deployed` (artefact Git, pas le fichier servi)
 
 **⚠️ Important** : Cette étape valide que `deploy.yml` a **écrit** `deployed/<env>/version.json` sur la branche Git `deployed`. **Ce n'est pas le fichier que le code lit en production** (`public/index.php` lit `deployed-version.json` sur le disque du serveur). Le lien entre ces deux fichiers est hors dépôt (copie par webhook, script, ou mécanisme hébergement).
 
-- [ ] **5.2.1** : Récupérer la branche `deployed`
+- [ ] **5.2.1** : **Avant** le push staging, capturer le SHA256 du fichier version production
   ```bash
   git fetch origin deployed
+  git show origin/deployed:production/version.json > /tmp/prod-version-before.json
+  PROD_SHA_BEFORE=$(sha256sum /tmp/prod-version-before.json | awk '{print $1}')
+  echo "SHA production AVANT: $PROD_SHA_BEFORE"
+  # Vérifier aussi le contenu (sauvegarde pour la comparaison finale)
+  cat /tmp/prod-version-before.json
   ```
+  Vérifier : Fichier créé avec contenu JSON valide, `ref` = `production`, champs `sha`, `ref`, `environnement`, `schemaVersion`, `deployedAt` présents.
 
-- [ ] **5.2.2** : Lire la version publiée pour `staging` (Git artefact)
+- [ ] **5.2.2** : **Après** votre fusion dans `staging` (étape 5.1.5), refetcher et vérifier que `staging` a été mise à jour
   ```bash
+  git fetch origin deployed
   git show origin/deployed:staging/version.json
   ```
-  Vérifier : Les champs `sha`, `ref`, `environnement`, `schemaVersion`, `deployedAt` sont présents et non `null`.
+  Vérifier : Les champs `sha`, `ref`, `environnement`, `schemaVersion`, `deployedAt` sont présents et non `null`. Le `ref` doit être `staging`. La valeur `sha` doit correspondre au commit que vous avez fusionné dans `staging`.
 
-- [ ] **5.2.3** : Vérifier que `production` n'a pas été modifiée
+- [ ] **5.2.3** : Vérifier que `production` n'a **pas** été modifiée par le workflow staging
+  
+  Comparer le contenu exact du fichier production avant et après votre fusion staging :
   ```bash
-  git show origin/deployed:production/version.json
+  git fetch origin deployed
+  git show origin/deployed:production/version.json > /tmp/prod-version-after.json
+  PROD_SHA_AFTER=$(sha256sum /tmp/prod-version-after.json | awk '{print $1}')
+  echo "SHA production AVANT:  $PROD_SHA_BEFORE"
+  echo "SHA production APRÈS:  $PROD_SHA_AFTER"
+  echo ""
+  echo "Comparaison du contenu :"
+  diff /tmp/prod-version-before.json /tmp/prod-version-after.json
   ```
-  Comparer les `deployedAt` des deux fichiers — ils ne doivent pas être identiques (timestamps distincts). Cela confirme l'isolation des deux canaux.
+  
+  Résultat attendu : 
+  - **Les deux SHA256 sont identiques** (`$PROD_SHA_BEFORE = $PROD_SHA_AFTER`).
+  - **La sortie de `diff` est vide** (fichiers identiques au bit près).
+  
+  Cela confirme l'**isolation stricte** entre `staging` et `production` — un push sur `staging` ne doit jamais modifier `deployed/production/version.json`, et le fichier production doit rester bit-for-bit identique.
 
 ---
 
@@ -345,7 +484,7 @@ rm -rf /tmp/shift-pilot-test
 Si tous les points ci-dessus sont cochés, les quatre domaines critiques du service sont fonctionnels :
 
 1. **Installation locale** — service démarre, endpoints répondent
-2. **Migrations de schéma** — application atomique, sauvegarde, rollback possible
+2. **Migrations de schéma** — application atomique, sauvegarde obligatoire, rollback transactionnel de la migration courante
 3. **API en lecture seule** — format JSON conforme, 5 commandes persistées
 4. **Pipeline multi-environnement** — CI/CD fonctionne, deux canaux isolés
 

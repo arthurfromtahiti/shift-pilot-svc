@@ -10,7 +10,7 @@ statiques, sans persistance ni environnement en ligne.
 | | |
 |---|---|
 | **Persistance** | SQLite, fichier `data/app.db` **versionné**. Les migrations modifient donc de vraies données, et une sauvegarde est un vrai fichier. |
-| **Version servie** | Publiée par le déploiement sur la branche `deployed`, jamais déduite du code. C'est elle qui fait foi. |
+| **Version publiée** | Publiée par le déploiement sur la branche `deployed`, jamais déduite du code. Source de vérité en Git — voir aussi « Version servie » ci-dessous. |
 | **Canal de déploiement** | `staging` et `main`, chacun avec son environnement. |
 
 ## Les deux canaux — la distinction est le sujet, pas un détail
@@ -23,16 +23,32 @@ statiques, sans persistance ni environnement en ligne.
 
 Confondre les deux est l'échec que ce dépôt sert à détecter.
 
-## Version servie
+## Version servie — deux domaines
 
-Le déploiement écrit un `version.json` lisible publiquement :
+### Artefact Git (branche `deployed`)
+
+Le déploiement publie un `version.json` sur la branche Git `deployed` :
 
 - `deployed/staging/version.json`
 - `deployed/production/version.json`
 
-Il porte le SHA réellement déployé, la version de schéma appliquée et l'horodatage.
-**Si un déploiement n'aboutit pas, ce fichier reste celui de la version précédente** — un merge
-n'a alors produit *aucune* nouvelle version servie, et cela doit se voir.
+Il porte le SHA du commit déployé, la version de schéma appliquée et l'horodatage UTC.
+**Si un déploiement n'aboutit pas, ce fichier reste celui de la version précédente** — aucune 
+nouvelle version n'est publiée en Git, et cela doit se voir.
+
+Vérifiable via `git show origin/deployed:staging/version.json` — **tracé dans l'historique Git, immuable**.
+
+### Fichier serveur (hors dépôt)
+
+Le code PHP (`public/index.php`) lit un fichier `deployed-version.json` à la racine du projet web sur l'hôte.
+**Ce fichier n'est pas versionné dans le dépôt** — sa présence et son contenu dépendent d'un script
+d'hébergement externe (webhook, cron, Ansible, K8s, etc.) qui copie le fichier Git vers le disque.
+
+**Distinction critique** :
+- **Git** (`deployed/<env>/version.json`) : Publié par CI/CD, tracé, immuable après commit
+- **Hôte** (`deployed-version.json`) : Copié par script externe, hors responsabilité du dépôt
+
+Pour les détails sur cette distinction et son impact, voir `.onboarding/GUIDE_DEPLOIEMENT.md`.
 
 ## Migrations
 
