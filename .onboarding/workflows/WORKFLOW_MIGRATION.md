@@ -6,12 +6,12 @@
 - **Visibilité** : `technical`
 - **Acteur principal** : Développeur, agent CI, ou `deploy.yml` (GitHub Actions)
 - **Acteurs** : Opérateur (développeur / CI) ; `bin/migrate.php` ; `App\Db` ; `data/app.db` ; `data/backups/` ; `migrations/*.sql`
-- **Criticité** : Haute — mute `data/app.db`, fichier **versionné** dans le dépôt ; toute corruption est persistée dans le repo
+- **Criticité** : Haute — modifie `data/app.db`, fichier versionné dans le dépôt comme état de départ des migrations ; en usage local, une corruption du fichier versionné peut être commitée dans le repo ; en CI, `deploy.yml` n'écrit pas la base modifiée dans le dépôt (voir Risques)
 - **Confiance** : high
 - **Justification** : `bin/migrate.php` lu intégralement (77 lignes). `src/Db.php` lu intégralement. `migrations/001_init.sql` lu. `composer.json` (scripts) lu. README (section Migrations) lu. Comportement déterministe, aucun branchement non visible.
 
 ## Objectif
-Permettre à un opérateur (développeur ou CI) d'appliquer les fichiers SQL de migration non encore enregistrés en base, en garantissant que **la base est sauvegardée avant toute mutation réelle** et que **chaque migration est atomique**. Le mode essai à blanc affiche le SQL qui serait appliqué sans aucune écriture, y compris en CI sur chaque PR.
+Permettre à un opérateur (développeur ou CI) d'appliquer les fichiers SQL de migration non encore enregistrés en base, en garantissant que **la base est sauvegardée avant l'exécution de tout fichier de migration** et que **chaque migration est atomique**. Cette garantie porte sur la copie effectuée à l'étape 10, après que `Db::connect()` (étape 3) a déjà ouvert — ou créé à vide — le fichier SQLite ; si la base était absente avant le lancement, la sauvegarde sera la copie d'un fichier vide, non d'une base réelle. Le mode essai à blanc affiche le SQL qui serait appliqué **sans exécuter aucun fichier de migration**, y compris en CI sur chaque PR — `Db::connect()` et `Db::schemaVersion()` sont néanmoins exécutés avant la sortie anticipée (ils exécutent `PRAGMA foreign_keys = ON` et des `SELECT` en lecture, `src/Db.php:20,27-31`) et peuvent créer le fichier SQLite s'il n'existait pas encore (voir Étape 8 du mode essai à blanc).
 
 ## Acteurs
 - **Opérateur** : développeur en local, ou étape `Appliquer les migrations` du `deploy.yml` (GitHub Actions)
@@ -23,7 +23,7 @@ Permettre à un opérateur (développeur ou CI) d'appliquer les fichiers SQL de 
 
 ## Points d'entrée
 
-- `php bin/migrate.php --dry-run` — essai à blanc : aucun SQL exécuté, affiche les fichiers qui seraient appliqués — la connexion SQLite est ouverte avant la sortie anticipée (peut créer le fichier de base si le chemin n'existait pas)
+- `php bin/migrate.php --dry-run` — essai à blanc : aucun fichier de migration exécuté ; `Db::connect()` et `Db::schemaVersion()` exécutent néanmoins `PRAGMA foreign_keys = ON` et des `SELECT` en lecture (`src/Db.php:20,27-31`) avant la sortie anticipée (peuvent créer le fichier de base si le chemin n'existait pas)
 - `php bin/migrate.php` — application réelle : sauvegarde + application dans des transactions
 - `composer migrate:dry` — alias Composer de `--dry-run` (`composer.json`, `scripts.migrate:dry`)
 - `composer migrate` — alias Composer de l'application réelle (`composer.json`, `scripts.migrate`)
@@ -49,7 +49,7 @@ Permettre à un opérateur (développeur ou CI) d'appliquer les fichiers SQL de 
 
 ### Mode essai à blanc (`--dry-run`)
 
-8. **Sortie anticipée** : affiche le contenu SQL de chaque fichier à appliquer puis `exit(0)` (`bin/migrate.php:41-48`). **Aucun SQL n'est exécuté** — la connexion SQLite (`Db::connect()`, `bin/migrate.php:17`) a déjà été ouverte avant d'atteindre cette sortie anticipée ; si le chemin de la base (`data/app.db` ou `SVC_DB_PATH`) n'existait pas, le fichier SQLite aura été créé à vide par PDO lors de la connexion. La garantie porte donc sur l'absence d'écriture SQL après connexion, non sur l'absence absolue d'effet disque.
+8. **Sortie anticipée** : affiche le contenu SQL de chaque fichier à appliquer puis `exit(0)` (`bin/migrate.php:41-48`). **Aucun fichier de migration n'est exécuté** — `Db::connect()` et `Db::schemaVersion()` ont cependant déjà exécuté `PRAGMA foreign_keys = ON` et des `SELECT` (`src/Db.php:20,27-31`) avant d'atteindre cette sortie anticipée ; si le chemin de la base (`data/app.db` ou `SVC_DB_PATH`) n'existait pas, PDO l'a créé à vide lors de la connexion (`src/Db.php:17`). La garantie porte sur l'absence d'exécution des fichiers de migration, non sur l'absence absolue d'effet disque ou de requêtes de connexion/lecture.
 
 ### Mode application réelle (sans `--dry-run`)
 
@@ -57,14 +57,14 @@ Permettre à un opérateur (développeur ou CI) d'appliquer les fichiers SQL de 
 
 9. **Calcul du nom de sauvegarde** : `app-<YYYYMMDD-HHmmss UTC>-avant-v<N>.db` où `<N>` est `max(array_keys($aFaire))` — la version **cible** la plus haute à appliquer (`bin/migrate.php:55`).
 
-10. **Sauvegarde obligatoire** : `copy(Db::path(), $sauvegarde)` (`bin/migrate.php:56`). Si la copie échoue : message sur `STDERR` + `exit(1)`. **Aucune migration n'est appliquée sans sauvegarde réussie.**
+10. **Sauvegarde obligatoire** : `copy(Db::path(), $sauvegarde)` (`bin/migrate.php:56`). Si la copie échoue : message sur `STDERR` + `exit(1)`. **Aucune migration n'est appliquée sans sauvegarde réussie.** Cette garantie s'applique lorsque la base existait déjà avant l'exécution. Si la base n'existait pas, `Db::connect()` (étape 3) a créé le fichier SQLite à vide (`src/Db.php:17`) — la sauvegarde sera alors la copie d'un fichier vide, non d'une base réelle.
 
 11. **Application transactionnelle** : pour chaque fichier de `$aFaire` dans l'ordre d'insertion — lequel est l'ordre lexicographique des chemins issu du `sort()` de l'étape 5 (`bin/migrate.php:62-76`) :
     - `$pdo->beginTransaction()`
     - `$pdo->exec(file_get_contents($f))` — exécute le SQL
     - `INSERT INTO schema_migrations (version, applied_at) VALUES (:v, :t)` avec horodatage UTC (`gmdate('c')`)
     - `$pdo->commit()`
-    - En cas de `Throwable` : `$pdo->rollBack()` + message `STDERR` citant la sauvegarde + `exit(1)` → **la migration courante est rollbackée ; les migrations déjà commitées lors des itérations précédentes restent persistées**
+    - En cas de `Throwable` : `$pdo->rollBack()` + messages sur `STDERR` + `exit(1)` → **la migration courante est rollbackée ; les migrations déjà commitées lors des itérations précédentes restent persistées**. Le message STDERR `"la base est inchangée"` (`bin/migrate.php:73`) est trompeur : il ne tient pas compte des migrations déjà commitées lors des itérations précédentes de la même exécution.
 
 12. **Confirmation** : affiche `"version de schéma finale : N"` via `Db::schemaVersion($pdo)` relu en base (`bin/migrate.php:77`).
 

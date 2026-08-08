@@ -56,7 +56,7 @@ Publier, après chaque push sur `main` ou `staging` et uniquement si la suite de
 
 - **Deux canaux strictement distincts** : `staging` → `deployed/staging/version.json` ; `main` → `deployed/production/version.json`. Ces deux fichiers coexistent sur la branche `deployed` sans jamais s'écraser (`deploy.yml:38-41`, `mkdir -p "$CIBLE"`).
 
-- **Pas de publication sans suite verte** : les tests (`composer test`) sont exécutés **avant** les migrations et la publication. Un test rouge laisse la version servie inchangée (`deploy.yml:31-32`, commentaire « Un test rouge laisse volontairement la version servie inchangée »).
+- **Pas de publication sans suite verte** : les tests (`composer test`) sont exécutés **avant** les migrations et la publication. Un test rouge laisse la version publiée sur la branche `deployed` inchangée (`deploy.yml:31-32`, dont le commentaire emploie l'expression « version servie » — preuve limitée à la branche `deployed`, non à l'hôte hors dépôt).
 
 - **La version servie ne se déduit jamais du code** : `schemaVersion` est lue en base après migration, jamais supposée depuis le nom du fichier de migration (`deploy.yml:46`). De même, `public/index.php` lit `deployed-version.json` depuis le disque, jamais depuis une constante de code (`public/index.php:16-19`).
 

@@ -85,6 +85,8 @@ Aucune intégration externe explicite visible. Le service est autosuffisant : SQ
 
 - **`deployed-version.json` absent** : si le fichier n'a pas été déposé par le mécanisme de déploiement, `/version` renvoie `sha: null, ref: null, deployedAt: null`. Le service répond correctement mais le champ de version est silencieusement vide — aucune erreur levée. (`public/index.php:17-19`)
 
+- **`deployed-version.json` contenant un JSON invalide** : si le fichier existe mais que son contenu n'est pas un JSON valide, `json_decode` retourne `null` (`public/index.php:17-18`). L'opérateur `+` appliqué à `null` et à un tableau en `public/index.php:27` (`$version + ['schemaVersion' => ...]`) peut provoquer une erreur fatale en PHP 8 (opérandes incompatibles). Ce chemin n'est pas protégé dans le code.
+
 - **Connexion PDO échoue** : `Db::connect()` est appelé avant le `switch`, à `public/index.php:11`, quel que soit l'endpoint demandé — y compris `/health`. Une `PDOException` (`PDO::ERRMODE_EXCEPTION` dans `src/Db.php:18`) n'est pas attrapée dans `public/index.php` : toute requête, y compris une sonde de santé, produira une réponse HTTP 500 avec stack trace si `display_errors` est actif.
 
 - **Identifiant non entier dans `/orders/{id}`** : le regex `#^/orders/(\d+)$#` n'accepte que des chiffres ; un chemin `/orders/abc` tombe en 404 « Route inconnue ». Comportement sûr mais silencieux (pas de message d'erreur distinctif).

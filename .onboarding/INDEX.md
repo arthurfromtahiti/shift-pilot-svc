@@ -1,0 +1,17 @@
+# INDEX — shift-pilot-svc
+
+| type | domaine | workflow | dépôt | fichier | date | version SHA | niveau de preuve | titre |
+|---|---|---|---|---|---|---|---|---|
+| domaine | tous | — | shift-pilot-svc | domaines/CARTE_DES_DOMAINES.md | 2026-08-08 | à renseigner après commit | contient une hypothèse | Carte des domaines — six domaines du micro-service PHP (commandes, api-http, persistance, migrations, déploiement, ci-tests) |
+| workflow | deploiement | DEPLOIEMENT | shift-pilot-svc | workflows/WORKFLOW_DEPLOIEMENT.md | 2026-08-08 | 45d5c8547e470a2e795d29d185f6c805022ad743 | contient une hypothèse | Publication de la version servie sur la branche `deployed` — pipeline CI/CD GitHub Actions, deux canaux staging/production |
+| workflow | migrations | MIGRATION | shift-pilot-svc | workflows/WORKFLOW_MIGRATION.md | 2026-08-08 | 45d5c8547e470a2e795d29d185f6c805022ad743 | contient une hypothèse | Application des migrations de schéma SQLite — dry-run, sauvegarde obligatoire, application transactionnelle |
+| workflow | api-http | SERVICE | shift-pilot-svc | workflows/WORKFLOW_SERVICE.md | 2026-08-08 | 45d5c8547e470a2e795d29d185f6c805022ad743 | contient une hypothèse | Service HTTP — routage, endpoints JSON en lecture seule, version servie |
+| audit | tous | — | shift-pilot-svc | audits/ARCHITECTURE_AUDIT.md | 2026-08-08 | à renseigner après commit | contient une hypothèse | Architecture — couches plates, couplages locaux, chaînon `deployed-version.json` hors dépôt |
+| audit | tous | — | shift-pilot-svc | audits/SECURITY_ROBUSTNESS_AUDIT.md | 2026-08-08 | à renseigner après commit | contient une hypothèse | Sécurité & Robustesse — surface minimale, fragilités de robustesse locales (JSON invalide, stack trace, sonde de santé) |
+| audit | commandes, persistance, migrations | — | shift-pilot-svc | audits/DATA_MODEL_AUDIT.md | 2026-08-08 | à renseigner après commit | contient une hypothèse | Modèle de données — schéma SQLite minimal, cycle de vie de `data/app.db`, absence de contraintes CHECK |
+| audit | tous | — | shift-pilot-svc | audits/CODE_HOTSPOTS_AUDIT.md | 2026-08-08 | à renseigner après commit | contient une hypothèse | Points chauds du code — `bin/migrate.php`, `public/index.php`, `deploy.yml` |
+| audit | ci-tests | — | shift-pilot-svc | audits/TESTING_AUDIT.md | 2026-08-08 | à renseigner après commit | contient une hypothèse | Tests — couverture partielle (Orders), zones non testées (routeur, migrateur, erreurs) |
+| audit | tous | — | shift-pilot-svc | audits/FUNCTIONAL_AUDIT.md | 2026-08-08 | à renseigner après commit | contient une hypothèse | Fonctionnel — endpoints complets, chaînon `deployed-version.json` manquant, comportements implicites de `/health` et `/version` |
+| journal-fabrication | tous | — | shift-pilot-svc | relectures/RELECTURE_WORKFLOW_DEPLOIEMENT.md | 2026-08-08 | à renseigner après commit | établi | Relecture WORKFLOW_DEPLOIEMENT — acceptable avec réserves sur le périmètre de « version servie » |
+| journal-fabrication | tous | — | shift-pilot-svc | relectures/RELECTURE_WORKFLOW_MIGRATION.md | 2026-08-08 | à renseigner après commit | établi | Relecture WORKFLOW_MIGRATION — acceptable avec réserves sur le dry-run et la base vide |
+| journal-fabrication | tous | — | shift-pilot-svc | relectures/RELECTURE_WORKFLOW_SERVICE.md | 2026-08-08 | à renseigner après commit | établi | Relecture WORKFLOW_SERVICE — acceptable avec réserves sur la priorité de `schemaVersion` |
