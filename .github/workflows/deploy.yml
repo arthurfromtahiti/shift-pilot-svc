@@ -1,0 +1,64 @@
+name: Déploiement
+# Publie la VERSION SERVIE sur la branche `deployed`, à un emplacement stable et
+# lisible publiquement. C'est cette version-là qui fait foi : si ce workflow
+# n'aboutit pas, le fichier reste celui du déploiement précédent — et un merge
+# n'aura donc PAS produit de nouvelle version servie.
+#
+#   staging    → deployed/staging/version.json
+#   main       → deployed/production/version.json
+on:
+  push:
+    branches: [main, staging]
+
+concurrency:
+  group: deploiement-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publier:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: pdo, pdo_sqlite
+      - run: composer install --no-interaction --prefer-dist
+
+      # Un déploiement ne publie une version que si la suite passe. Un test
+      # rouge laisse volontairement la version servie inchangée.
+      - name: Tests avant publication
+        run: composer test
+
+      - name: Appliquer les migrations
+        run: php bin/migrate.php
+
+      - name: Déterminer l'environnement
+        id: env
+        run: echo "cible=${{ github.ref_name == 'main' && 'production' || 'staging' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Publier la version servie
+        run: |
+          set -euo pipefail
+          CIBLE="${{ steps.env.outputs.cible }}"
+          SCHEMA=$(php -r 'require "vendor/autoload.php"; echo App\Db::schemaVersion(App\Db::connect());')
+          git fetch origin deployed --depth 1 || true
+          git checkout -B deployed "origin/deployed" 2>/dev/null || git checkout --orphan deployed
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          mkdir -p "$CIBLE"
+          cat > "$CIBLE/version.json" <<JSON
+          {
+            "sha": "${{ github.sha }}",
+            "ref": "${{ github.ref_name }}",
+            "environnement": "$CIBLE",
+            "schemaVersion": $SCHEMA,
+            "deployedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          JSON
+          git config user.name "deploiement-svc"
+          git config user.email "deploiement@shift-pilot-svc"
+          git add "$CIBLE/version.json"
+          git commit -m "deploy($CIBLE): ${{ github.sha }}" || echo "rien à publier"
+          git push origin deployed --force-with-lease

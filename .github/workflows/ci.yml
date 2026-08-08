@@ -1,0 +1,20 @@
+name: CI
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: pdo, pdo_sqlite
+      - run: composer install --no-interaction --prefer-dist
+      - name: Essai à blanc des migrations
+        run: php bin/migrate.php --dry-run
+      - name: Tests
+        run: composer test
