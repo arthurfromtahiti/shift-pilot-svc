@@ -12,10 +12,14 @@ Le déploiement est automatisé par GitHub Actions via deux workflows **indépen
 **Relation** : `ci.yml` ne déclenche **pas** `deploy.yml`. Elles tournent toutes deux sur 
 chaque push, mais en parallèle (groupe de concurrence distincts par branche). 
 
-- Si les tests (`ci.yml`) échouent, le pipeline s'arrête — aucun commit ne quitte le dépôt.
-- Si `ci.yml` passe, `deploy.yml` s'exécute **aussi** et écrit la version.
-- Si `deploy.yml` échoue, la version précédente reste sur `deployed` (et aucune nouvelle 
-  version n'est servie, car la synchronisation depend du fichier publié).
+- Si `ci.yml` échoue : signal rouge documenté, **aucune modification du dépôt**. `deploy.yml` 
+  continue en parallèle et exécute ses propres vérifications — l'absence de dépendance explicite 
+  signifie qu'un échec de `ci.yml` ne bloque **pas** `deploy.yml`.
+- Si `deploy.yml` échoue : la version précédente reste sur `deployed` (la version publiée 
+  ne change pas). La synchronisation vers l'hôte servi dépend d'un mécanisme external — 
+  voir section « Exécution » pour les détails.
+- Si `deploy.yml` passe : la version est écrite sur `deployed/staging/version.json` ou 
+  `deployed/production/version.json`.
 
 Les deux branches (`staging` et `main`) déploient indépendamment sur des répertoires distincts 
 de la branche `deployed` (`staging/version.json` vs `production/version.json`). 
