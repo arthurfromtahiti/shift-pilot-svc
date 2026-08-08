@@ -117,11 +117,25 @@ rm -rf /tmp/shift-pilot-test
 
 **Environnement** : Clone isolé `/tmp/shift-pilot-test/shift-pilot-svc/`
 
+**⚠️ État initial critique** : Cette phase suppose que `data/app.db` est **vierge (v0)**. Le clone isolé supprime déjà la base au démarrage. **Avant chaque exécution d'une étape**, vérifiez que la base est bien à v0 :
+
+```bash
+cd /tmp/shift-pilot-test/shift-pilot-svc
+# Garantir que la base est vierge
+rm -f data/app.db
+# Puis exécuter l'étape
+```
+
+Si, en cours de Phase 2, une étape laisse la base à v1 (migration appliquée), vous **devez** réinitialiser avant la suivante :
+```bash
+rm -f data/app.db
+```
+
 ### Étape 2.1 — Essai à blanc
 
-**Note préalable : Garantir l'état initial (obligatoire)**
+**Note préalable : État initial vierge (v0)**
 
-La procédure d'isolation en début du cahier supprime déjà `data/app.db`. **Avant toute étape de Phase 2, vous devez garantir que la base est vierge (v0)** :
+**Avant de commencer l'étape 2.1**, garantissez que la base est vierge :
 
 ```bash
 cd /tmp/shift-pilot-test/shift-pilot-svc
@@ -411,37 +425,43 @@ Pour valider complètement le pipeline (CI + déploiement), nous devons fusionne
 
 **⚠️ Important** : Cette étape valide que `deploy.yml` a **écrit** `deployed/<env>/version.json` sur la branche Git `deployed`. **Ce n'est pas le fichier que le code lit en production** (`public/index.php` lit `deployed-version.json` sur le disque du serveur). Le lien entre ces deux fichiers est hors dépôt (copie par webhook, script, ou mécanisme hébergement).
 
-- [ ] **5.2.1** : **Avant** le push staging, capturer la version production actuelle
+- [ ] **5.2.1** : **Avant** le push staging, capturer le SHA256 du fichier version production
   ```bash
   git fetch origin deployed
   git show origin/deployed:production/version.json > /tmp/prod-version-before.json
-  echo "SHA avant: $(sha256sum /tmp/prod-version-before.json)"
+  PROD_SHA_BEFORE=$(sha256sum /tmp/prod-version-before.json | awk '{print $1}')
+  echo "SHA production AVANT: $PROD_SHA_BEFORE"
+  # Vérifier aussi le contenu (sauvegarde pour la comparaison finale)
+  cat /tmp/prod-version-before.json
   ```
-  Vérifier : Fichier créé avec contenu JSON valide. Consigner le SHA256.
+  Vérifier : Fichier créé avec contenu JSON valide, `ref` = `production`, champs `sha`, `ref`, `environnement`, `schemaVersion`, `deployedAt` présents.
 
-- [ ] **5.2.2** : **Après** votre fusion dans `staging` (étape 5.1.5), refetcher et vérifier `staging` a été mise à jour
+- [ ] **5.2.2** : **Après** votre fusion dans `staging` (étape 5.1.5), refetcher et vérifier que `staging` a été mise à jour
   ```bash
   git fetch origin deployed
   git show origin/deployed:staging/version.json
   ```
-  Vérifier : Les champs `sha`, `ref`, `environnement`, `schemaVersion`, `deployedAt` sont présents et non `null`. Le `ref` doit être `staging`.
+  Vérifier : Les champs `sha`, `ref`, `environnement`, `schemaVersion`, `deployedAt` sont présents et non `null`. Le `ref` doit être `staging`. La valeur `sha` doit correspondre au commit que vous avez fusionné dans `staging`.
 
 - [ ] **5.2.3** : Vérifier que `production` n'a **pas** été modifiée par le workflow staging
   
-  Capturer à nouveau la version production et comparer les contenus complets :
+  Comparer le contenu exact du fichier production avant et après votre fusion staging :
   ```bash
   git fetch origin deployed
   git show origin/deployed:production/version.json > /tmp/prod-version-after.json
-  echo "SHA avant: $(sha256sum /tmp/prod-version-before.json | cut -d' ' -f1)"
-  echo "SHA après: $(sha256sum /tmp/prod-version-after.json | cut -d' ' -f1)"
+  PROD_SHA_AFTER=$(sha256sum /tmp/prod-version-after.json | awk '{print $1}')
+  echo "SHA production AVANT:  $PROD_SHA_BEFORE"
+  echo "SHA production APRÈS:  $PROD_SHA_AFTER"
+  echo ""
+  echo "Comparaison du contenu :"
   diff /tmp/prod-version-before.json /tmp/prod-version-after.json
   ```
   
   Résultat attendu : 
-  - Les deux SHA256 sont **identiques**.
-  - La sortie de `diff` est **vide** (fichiers identiques).
+  - **Les deux SHA256 sont identiques** (`$PROD_SHA_BEFORE = $PROD_SHA_AFTER`).
+  - **La sortie de `diff` est vide** (fichiers identiques au bit près).
   
-  Cela confirme l'isolation entre `staging` et `production` — un push sur `staging` ne modifie jamais `deployed/production/version.json`.
+  Cela confirme l'**isolation stricte** entre `staging` et `production` — un push sur `staging` ne doit jamais modifier `deployed/production/version.json`, et le fichier production doit rester bit-for-bit identique.
 
 ---
 
@@ -464,7 +484,7 @@ Pour valider complètement le pipeline (CI + déploiement), nous devons fusionne
 Si tous les points ci-dessus sont cochés, les quatre domaines critiques du service sont fonctionnels :
 
 1. **Installation locale** — service démarre, endpoints répondent
-2. **Migrations de schéma** — application atomique, sauvegarde, rollback possible
+2. **Migrations de schéma** — application atomique, sauvegarde obligatoire, rollback transactionnel de la migration courante
 3. **API en lecture seule** — format JSON conforme, 5 commandes persistées
 4. **Pipeline multi-environnement** — CI/CD fonctionne, deux canaux isolés
 

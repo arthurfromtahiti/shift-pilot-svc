@@ -23,16 +23,32 @@ statiques, sans persistance ni environnement en ligne.
 
 Confondre les deux est l'échec que ce dépôt sert à détecter.
 
-## Version servie
+## Version servie — deux domaines
 
-Le déploiement écrit un `version.json` lisible publiquement :
+### Artefact Git (branche `deployed`)
+
+Le déploiement publie un `version.json` sur la branche Git `deployed` :
 
 - `deployed/staging/version.json`
 - `deployed/production/version.json`
 
-Il porte le SHA réellement déployé, la version de schéma appliquée et l'horodatage.
+Il porte le SHA du commit déployé, la version de schéma appliquée et l'horodatage UTC.
 **Si un déploiement n'aboutit pas, ce fichier reste celui de la version précédente** — un merge
 n'a alors produit *aucune* nouvelle version servie, et cela doit se voir.
+
+Vérifiable via `git show origin/deployed:staging/version.json` — **tracé dans l'historique Git, immuable**.
+
+### Fichier serveur (hors dépôt)
+
+Le code PHP (`public/index.php`) lit un fichier `deployed-version.json` à la racine du projet web sur l'hôte.
+**Ce fichier n'est pas versionné dans le dépôt** — sa présence et son contenu dépendent d'un script
+d'hébergement externe (webhook, cron, Ansible, K8s, etc.) qui copie le fichier Git vers le disque.
+
+**Distinction critique** :
+- **Git** (`deployed/<env>/version.json`) : Publié par CI/CD, tracé, immuable après commit
+- **Hôte** (`deployed-version.json`) : Copié par script externe, hors responsabilité du dépôt
+
+Pour les détails sur cette distinction et son impact, voir `.onboarding/GUIDE_DEPLOIEMENT.md`.
 
 ## Migrations
 
