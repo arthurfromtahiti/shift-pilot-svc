@@ -2,13 +2,20 @@
 
 ## Vue d'ensemble
 
-Le déploiement est automatisé par GitHub Actions. Chaque push sur `staging` ou `main`
-déclenche un pipeline qui :
+Le déploiement est automatisé par GitHub Actions via deux workflows **indépendants** :
 
-1. Vérifie les tests (PHPUnit) et les migrations en CI
-2. Applique les migrations en cas de succès
-3. Écrit une version sur la branche `deployed`
-4. Pousse cette version sur `origin/deployed`
+| Workflow | Rôle | Déclencheur | Résultat |
+|----------|------|-----------|---------|
+| `ci.yml` | Validation (tests + essai migrations) | Push sur `main`, `staging`, PR | Succès/Échec (aucune modification repo) |
+| `deploy.yml` | Publication de version en dépôt | Push sur `main`, `staging` | Commit + push sur branche `deployed` |
+
+**Relation** : `ci.yml` ne déclenche **pas** `deploy.yml`. Elles tournent toutes deux sur 
+chaque push, mais en parallèle (groupe de concurrence distincts par branche). 
+
+- Si les tests (`ci.yml`) échouent, le pipeline s'arrête — aucun commit ne quitte le dépôt.
+- Si `ci.yml` passe, `deploy.yml` s'exécute **aussi** et écrit la version.
+- Si `deploy.yml` échoue, la version précédente reste sur `deployed` (et aucune nouvelle 
+  version n'est servie, car la synchronisation depend du fichier publié).
 
 Les deux branches (`staging` et `main`) déploient indépendamment sur des répertoires distincts 
 de la branche `deployed` (`staging/version.json` vs `production/version.json`). 
@@ -58,6 +65,49 @@ est l'échec que ce banc d'essai sert à détecter.
 
 ---
 
+## Distinction critique : publication vs. exécution
+
+C'est le point clé du système. **Deux espaces de vérité distincts** :
+
+### Publication (en dépôt Git)
+
+Le workflow `deploy.yml` écrit un fichier `<env>/version.json` sur la branche `deployed` :
+```bash
+deployed/
+  ├── staging/version.json      # Version publiée depuis staging
+  └── production/version.json   # Version publiée depuis main
+```
+
+**Contenu** : SHA du commit, branche source, schéma, horodatage du déploiement.
+**Responsable** : GitHub Actions (`deploy.yml`).
+**Source de vérité** : `git show origin/deployed:staging/version.json` (ou `production`).
+
+### Exécution (sur l'hôte servi)
+
+L'endpoint `/version` lit le fichier **`deployed-version.json` à la racine** de l'application servie :
+```
+~/shift-pilot-svc/
+  └── deployed-version.json   # Fichier qui doit correspondre à ce qui est publié
+```
+
+**Contenu** : copie de `staging/version.json` ou `production/version.json`.
+**Responsable** : un processus **external au dépôt** (webhook, script hébergement, …).
+**Comportement** : si absent, `/version` retourne un JSON valide mais partiel 
+(`sha/ref/deployedAt` à `null`, `schemaVersion` seul lu depuis la base).
+
+### Le maillon manquant
+
+Aucun mécanisme du dépôt ne copie le fichier de `deployed` à la racine de l'hôte. 
+C'est un **problème de conception**, pas une erreur : il existe trois approches :
+
+1. **Webhook post-déploiement** : GitHub appelle un script qui tire la version depuis `deployed`
+2. **Script de déploiement** : l'hébergement exécute `git show ... > deployed-version.json`
+3. **CI custom** : ajouter une étape après `git push origin deployed` qui déploie aussi sur l'hôte
+
+Voir `QUESTIONS_OUVERTES.md` pour la décision définitive.
+
+---
+
 ## Vérifications avant de pousser
 
 Le développeur **doit** vérifier localement avant tout push. Ne pas compter sur le CI pour 
@@ -70,73 +120,59 @@ composer test                     # Vérifier les tests unitaires
 
 Voir `GUIDE_MIGRATIONS.md` section « Avant de déployer une migration » pour les détails complets.
 
-## Pipeline de déploiement (`.github/workflows/deploy.yml`)
+## Workflows : Validation et Publication
 
-### Déclencheurs
+Deux workflows s'exécutent **en parallèle et indépendamment** sur chaque push.
 
-```yaml
-on:
-  push:
-    branches:
-      - staging
-      - main
-```
+### Workflow 1 : Validation (`ci.yml`)
 
-Tout push sur `staging` ou `main` déclenche le pipeline — pas de bouton manuel, pas de PR.
+**Déclencheur** : Push sur `main`, `staging`, ou ouverture d'une PR.
 
-### Étapes
+**Étapes** :
+1. Checkout et setup PHP 8.1, extensions PDO
+2. Essai à blanc des migrations : `php bin/migrate.php --dry-run`
+3. Tests unitaires : `composer test`
 
-#### 1. Checkout et setup
+**Arrêt si** : un test échoue ou les migrations ont une syntaxe invalide.
+**Sortie** : succès/échec — **aucune modification du dépôt** (lecture seule).
+
+### Workflow 2 : Publication (`deploy.yml`)
+
+**Déclencheur** : Push sur `main` ou `staging` **uniquement** (pas sur PR).
+
+**Dépendance** : `ci.yml` n'est **pas** un prérequis. `deploy.yml` s'exécute aussi, mais 
+inclut ses propres vérifications (tests, migrations). Si une vérification échoue, la version 
+n'est pas publiée, mais **l'absence de dépendance explicite** signifie que les deux workflows 
+tournent en parallèle, et `deploy.yml` n'attend **jamais** que `ci.yml` finisse.
+
+**Étapes** :
+
+#### 1. Validation interne
 
 ```bash
-actions/checkout@v4
-shivammathur/setup-php@v2 (PHP 8.1, extensions pdo, pdo_sqlite)
-composer install --no-interaction --prefer-dist
-```
-
-Récupère le code, configure PHP, installe les dépendances.
-
-#### 2. Tests (`composer test`)
-
-```bash
-php -m | grep -E '(pdo|pdo_sqlite)' && phpunit
-```
-
-Exécute PHPUnit contre une base temporaire. **Si les tests échouent, le pipeline s'arrête** —
-aucune migration n'est appliquée, aucune version n'est publiée. La version précédente reste
-sur la branche `deployed`.
-
-#### 3. Application réelle des migrations
-
-Le pipeline `.github/workflows/deploy.yml` (exécuté après la CI qui valide les tests) applique :
-```bash
+composer test
 php bin/migrate.php
 ```
 
-Les migrations appliquées en CI contre `data/app.db` versionné (état initial). La base modifiée 
-n'est pas commitée — à la prochaine migration, elle s'applique aussi contre l'état initial.
+Tests et migrations. **Si un échoue, le pipeline s'arrête** — aucun commit sur `deployed`.
 
-Copie la base dans `data/backups/app-<horodatage>-avant-v<N>.db`, puis applique chaque
-migration en transaction. **Si une migration échoue, le pipeline s'arrête** — la version
-précédente reste sur `deployed`.
-
-#### 4. Détermination de l'environnement
+#### 2. Détermination de l'environnement
 
 ```bash
 CIBLE=$( [[ "${{ github.ref_name }}" == "main" ]] && echo "production" || echo "staging" )
 ```
 
-`main` → `production`, toute autre branche → `staging`.
+`main` → `production`, `staging` → `staging`.
 
-#### 5. Récupération de la branche `deployed`
+#### 3. Récupération de la branche `deployed`
 
 ```bash
 git fetch origin deployed --depth 1
 ```
 
-Récupère la branche `deployed` pour ne pas écraser les fichiers de l'autre environnement.
+Récupère l'état existant de `deployed` pour ne pas écraser les fichiers de l'autre environnement.
 
-#### 6. Écriture du `version.json`
+#### 4. Écriture du `version.json`
 
 ```json
 {
@@ -148,9 +184,9 @@ Récupère la branche `deployed` pour ne pas écraser les fichiers de l'autre en
 }
 ```
 
-Exemple : `deployed/staging/version.json` ou `deployed/production/version.json`.
+Écrit dans `<environnement>/version.json` (soit `staging/version.json` ou `production/version.json`).
 
-#### 7. Commit et push
+#### 5. Commit et push
 
 ```bash
 git add <environnement>/version.json
@@ -158,7 +194,8 @@ git commit -m "deploy(<environnement>): <SHA>"
 git push origin deployed --force-with-lease
 ```
 
-Le `--force-with-lease` évite d'écraser un push concurrent sur `deployed` (protection légère).
+Publie sur la branche `deployed`. Le `--force-with-lease` échoue si l'autre environnement a 
+poussé entre-temps (rare, voir section **Concurrence**).
 
 ## Sauvegardes
 
@@ -332,29 +369,54 @@ Avant de fusionner sur `staging` ou `main`, l'agent/développeur/maintenance doi
 
 ### `/version` retourne des champs `null`
 
-1. **Cause probable** : le fichier `deployed-version.json` n'est pas sur l'hôte servi
-2. **Explication** : 
-   - Le workflow `deploy.yml` écrit `<env>/version.json` (soit `staging/version.json`, soit 
-     `production/version.json`) sur la branche `deployed` dans le dépôt Git.
-   - L'endpoint `/version` de `public/index.php` lit le fichier `deployed-version.json` à la 
-     racine du projet servi (ligne 16-19).
-   - **Le maillon manquant** : aucun mécanisme du dépôt ne copie ce fichier de la branche 
-     `deployed` à la racine de l'hôte. Cela exige une étape externe : webhook post-deploy, 
-     script de dépôt, ou synchronisation filesystem.
+1. **Cause** : le fichier `deployed-version.json` n'existe pas ou est mal synchronisé sur l'hôte servi
+   
+2. **Comprendre le flux** : 
+   - **Publication en dépôt** : le workflow `deploy.yml` écrit `staging/version.json` ou 
+     `production/version.json` sur la branche `deployed` (source de vérité en Git).
+   - **Lecture en service** : l'endpoint `/version` (ligne 16–19 de `public/index.php`) lit 
+     le fichier `deployed-version.json` **à la racine du projet servi** sur l'hôte d'exécution.
+   - **Le maillon critique** : aucun mécanisme du dépôt ne copie ce fichier de `deployed` 
+     à la racine. Cela dépend d'un **processus external** : webhook post-déploiement, 
+     script de synchronisation, ou script d'hébergement.
+
 3. **Diagnostic** :
    ```bash
    # Sur l'hôte servi
-   ls -la deployed-version.json
-   # Sur le dépôt local
+   ls -la deployed-version.json  # Doit exister et être à jour
+   cat deployed-version.json     # Doit contenir des clés valides (sha, ref, deployedAt, schemaVersion)
+   
+   # Vérifier ce qui a été publié en dépôt
    git show origin/deployed:staging/version.json
    ```
-4. **Action de court terme** :
-   - Extraire manuellement et copier sur l'hôte :
-     ```bash
-     git show origin/deployed:<env>/version.json > deployed-version.json
-     ```
-     où `<env>` est `staging` ou `production`.
-   - Voir `QUESTIONS_OUVERTES.md` pour la décision sur le mécanisme de dépôt.
+
+4. **Comportement du code** (`public/index.php`, ligne 17–27) :
+   
+   **Cas A : fichier absent** → Retourne JSON valide mais partiel :
+   ```json
+   {"sha": null, "ref": null, "deployedAt": null, "schemaVersion": 1}
+   ```
+   Cela indique que le déploiement n'a pas été synchronisé avec l'hôte.
+   
+   **Cas B : fichier existe, JSON valide** → Retourne JSON complet avec la version servie.
+   
+   **Cas C : fichier existe, JSON invalide** ⚠️  **Risque** → L'opérateur `+` ligne 27 reçoit 
+   une valeur `false` ou `null` de `json_decode()`, ce qui provoque une `TypeError` en PHP 8.1+ 
+   et retourne une erreur 500 (cf. commentaire du code ligne 18 : `json_decode(..., true)` 
+   sans fallback robuste).
+   
+   **Mitigation** : s'assurer que le fichier `deployed-version.json` est toujours du JSON valide.
+   Si corruption détectée : regénérer avec `git show origin/deployed:<env>/version.json > deployed-version.json`.
+
+5. **Action de court terme (pour tests locaux)** :
+   ```bash
+   # Extraire manuellement depuis la branche deployed
+   git show origin/deployed:staging/version.json > deployed-version.json
+   ```
+   
+6. **Action définitive** : implémenter le mécanisme de synchronisation
+   - Voir `QUESTIONS_OUVERTES.md` pour la décision architecturale sur ce processus externe.
+   - Options courantes : webhook GitHub post-push, script CI, intégration hébergement.
 
 ### `schemaVersion` en `/version` est obsolète
 
