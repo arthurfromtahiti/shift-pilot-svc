@@ -48,6 +48,30 @@ final class OrdersTest extends TestCase
         }
     }
 
+    public function testClientRefPresentSurChaqueCommandeDeLaListe(): void
+    {
+        foreach ((new Orders($this->pdo))->all() as $o) {
+            self::assertArrayHasKey('clientRef', $o, 'Le champ clientRef doit être exposé dans all()');
+            self::assertStringStartsWith('CLI-', $o['clientRef']);
+        }
+    }
+
+    public function testClientRefPresentSurUneCommandeUnique(): void
+    {
+        $o = (new Orders($this->pdo))->find(3);
+        self::assertNotNull($o);
+        self::assertArrayHasKey('clientRef', $o, 'Le champ clientRef doit être exposé dans find()');
+        self::assertSame('CLI-MANOA', $o['clientRef']);
+    }
+
+    public function testChampClientResteInchange(): void
+    {
+        $o = (new Orders($this->pdo))->find(3);
+        self::assertNotNull($o);
+        self::assertArrayHasKey('client', $o);
+        self::assertSame('Manoa', $o['client']);
+    }
+
     public function testVersionDeSchemaLueEnBase(): void
     {
         // Aucune ligne dans schema_migrations tant que bin/migrate.php n'a pas tourné.

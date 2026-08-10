@@ -12,12 +12,12 @@ final class Orders
     /** @return array<int, array<string, mixed>> */
     public function all(): array
     {
-        return $this->pdo->query('SELECT id, client, montant_cents, devise, statut FROM orders ORDER BY id')->fetchAll();
+        return $this->pdo->query('SELECT id, client, montant_cents, devise, statut, client_ref AS clientRef FROM orders ORDER BY id')->fetchAll();
     }
 
     public function find(int $id): ?array
     {
-        $st = $this->pdo->prepare('SELECT id, client, montant_cents, devise, statut FROM orders WHERE id = :id');
+        $st = $this->pdo->prepare('SELECT id, client, montant_cents, devise, statut, client_ref AS clientRef FROM orders WHERE id = :id');
         $st->execute([':id' => $id]);
         $row = $st->fetch();
         return $row === false ? null : $row;
