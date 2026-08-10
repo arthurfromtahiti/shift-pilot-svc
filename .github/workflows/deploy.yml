@@ -5,10 +5,11 @@ name: Déploiement
 # n'aura donc PAS produit de nouvelle version servie.
 #
 #   staging    → deployed/staging/version.json
+#   preprod    → deployed/preprod/version.json
 #   main       → deployed/production/version.json
 on:
   push:
-    branches: [main, staging]
+    branches: [main, staging, preprod]
 
 concurrency:
   group: deploiement-${{ github.ref }}
@@ -37,7 +38,14 @@ jobs:
 
       - name: Déterminer l'environnement
         id: env
-        run: echo "cible=${{ github.ref_name == 'main' && 'production' || 'staging' }}" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "cible=production" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.ref_name }}" = "preprod" ]; then
+            echo "cible=preprod" >> "$GITHUB_OUTPUT"
+          else
+            echo "cible=staging" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Publier la version servie
         run: |

@@ -28,7 +28,7 @@ switch ($path) {
         break;
 
     default:
-        [$status, $body] = (new Router($pdo))->dispatch($path);
+        [$status, $body] = (new Router($pdo))->dispatch($path, $_GET);
         http_response_code($status);
         echo json_encode($body);
 }

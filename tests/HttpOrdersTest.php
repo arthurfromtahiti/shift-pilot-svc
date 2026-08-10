@@ -91,4 +91,20 @@ final class HttpOrdersTest extends TestCase
         self::assertIsArray($r['body']);
         self::assertArrayHasKey('error', $r['body']);
     }
+
+    public function testLimitRenvoie200AvecAuPlusNCommandes(): void
+    {
+        $r = $this->request('/orders?limit=2');
+        self::assertSame(200, $r['status']);
+        self::assertIsArray($r['body']);
+        self::assertLessThanOrEqual(2, count($r['body']));
+    }
+
+    public function testLimitInvalideRenvoie400(): void
+    {
+        $r = $this->request('/orders?limit=0');
+        self::assertSame(400, $r['status']);
+        self::assertIsArray($r['body']);
+        self::assertArrayHasKey('error', $r['body']);
+    }
 }
