@@ -136,4 +136,14 @@ final class OrdersTest extends TestCase
         self::assertSame(1, (int) $r['data'][0]['id']);
         self::assertFalse($r['pagination']['hasMore']);
     }
+
+    public function testPaginateExposeClientRef(): void
+    {
+        $r = (new Orders($this->pdo))->paginate(2, null);
+        self::assertCount(2, $r['data']);
+        foreach ($r['data'] as $o) {
+            self::assertArrayHasKey('clientRef', $o, 'paginate() doit exposer clientRef comme all() et find()');
+            self::assertStringStartsWith('CLI-', $o['clientRef']);
+        }
+    }
 }
