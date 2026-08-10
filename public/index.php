@@ -39,10 +39,10 @@ switch ($path) {
             }
             $afterInt = null;
             if ($qAfter !== null) {
-                $afterInt = filter_var($qAfter, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+                $afterInt = filter_var($qAfter, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
                 if ($afterInt === false) {
                     http_response_code(400);
-                    echo json_encode(['error' => 'Paramètre after invalide : identifiant entier positif attendu']);
+                    echo json_encode(['error' => 'Paramètre after invalide : entier >= 0 attendu']);
                     break;
                 }
             }

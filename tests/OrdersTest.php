@@ -62,8 +62,9 @@ final class OrdersTest extends TestCase
         self::assertCount(2, $r['data']);
         self::assertSame(1, (int) $r['data'][0]['id']);
         self::assertSame(2, (int) $r['data'][1]['id']);
-        self::assertTrue($r['pagination']['has_more']);
-        self::assertSame(2, $r['pagination']['next_cursor']);
+        self::assertSame(2, $r['pagination']['limit']);
+        self::assertTrue($r['pagination']['hasMore']);
+        self::assertSame(2, $r['pagination']['nextCursor']);
     }
 
     public function testPaginateAvecCurseur(): void
@@ -72,32 +73,43 @@ final class OrdersTest extends TestCase
         self::assertCount(2, $r['data']);
         self::assertSame(3, (int) $r['data'][0]['id']);
         self::assertSame(4, (int) $r['data'][1]['id']);
-        self::assertTrue($r['pagination']['has_more']);
-        self::assertSame(4, $r['pagination']['next_cursor']);
+        self::assertSame(2, $r['pagination']['limit']);
+        self::assertTrue($r['pagination']['hasMore']);
+        self::assertSame(4, $r['pagination']['nextCursor']);
     }
 
     public function testPaginateDernierePage(): void
     {
         $r = (new Orders($this->pdo))->paginate(2, 4);
         self::assertCount(1, $r['data']);
-        self::assertSame(5, (int) $r['data'][0]['id']);
-        self::assertFalse($r['pagination']['has_more']);
-        self::assertNull($r['pagination']['next_cursor']);
+        self::assertSame(2, $r['pagination']['limit']);
+        self::assertFalse($r['pagination']['hasMore']);
+        self::assertNull($r['pagination']['nextCursor']);
     }
 
     public function testPaginateSansCurseurHasMoreFalsiAvecTout(): void
     {
         $r = (new Orders($this->pdo))->paginate(10, null);
         self::assertCount(5, $r['data']);
-        self::assertFalse($r['pagination']['has_more']);
-        self::assertNull($r['pagination']['next_cursor']);
+        self::assertSame(10, $r['pagination']['limit']);
+        self::assertFalse($r['pagination']['hasMore']);
+        self::assertNull($r['pagination']['nextCursor']);
     }
 
     public function testPaginateCurseurApresLaDerniere(): void
     {
         $r = (new Orders($this->pdo))->paginate(5, 5);
         self::assertCount(0, $r['data']);
-        self::assertFalse($r['pagination']['has_more']);
-        self::assertNull($r['pagination']['next_cursor']);
+        self::assertSame(5, $r['pagination']['limit']);
+        self::assertFalse($r['pagination']['hasMore']);
+        self::assertNull($r['pagination']['nextCursor']);
+    }
+
+    public function testPaginateAfterZeroRetourneTout(): void
+    {
+        $r = (new Orders($this->pdo))->paginate(10, 0);
+        self::assertCount(5, $r['data']);
+        self::assertSame(1, (int) $r['data'][0]['id']);
+        self::assertFalse($r['pagination']['hasMore']);
     }
 }

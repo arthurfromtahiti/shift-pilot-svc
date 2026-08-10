@@ -96,8 +96,9 @@ final class HttpOrdersTest extends TestCase
         self::assertArrayHasKey('data', $r['body']);
         self::assertArrayHasKey('pagination', $r['body']);
         self::assertCount(2, $r['body']['data']);
-        self::assertTrue($r['body']['pagination']['has_more']);
-        self::assertSame(2, $r['body']['pagination']['next_cursor']);
+        self::assertSame(2, $r['body']['pagination']['limit']);
+        self::assertTrue($r['body']['pagination']['hasMore']);
+        self::assertSame(2, $r['body']['pagination']['nextCursor']);
     }
 
     public function testAfterEtLimitPagineCurseur(): void
@@ -106,7 +107,8 @@ final class HttpOrdersTest extends TestCase
         self::assertSame(200, $r['status']);
         self::assertCount(2, $r['body']['data']);
         self::assertSame(3, (int) $r['body']['data'][0]['id']);
-        self::assertTrue($r['body']['pagination']['has_more']);
+        self::assertSame(2, $r['body']['pagination']['limit']);
+        self::assertTrue($r['body']['pagination']['hasMore']);
     }
 
     public function testDernierePageHasMoreFaux(): void
@@ -114,8 +116,19 @@ final class HttpOrdersTest extends TestCase
         $r = $this->request('/orders?after=4&limit=5');
         self::assertSame(200, $r['status']);
         self::assertCount(1, $r['body']['data']);
-        self::assertFalse($r['body']['pagination']['has_more']);
-        self::assertNull($r['body']['pagination']['next_cursor']);
+        self::assertSame(5, $r['body']['pagination']['limit']);
+        self::assertFalse($r['body']['pagination']['hasMore']);
+        self::assertNull($r['body']['pagination']['nextCursor']);
+    }
+
+    public function testAfterZeroRetourneToutDepuisDebut(): void
+    {
+        $r = $this->request('/orders?after=0&limit=10');
+        self::assertSame(200, $r['status']);
+        self::assertArrayHasKey('data', $r['body']);
+        self::assertCount(5, $r['body']['data']);
+        self::assertSame(1, (int) $r['body']['data'][0]['id']);
+        self::assertFalse($r['body']['pagination']['hasMore']);
     }
 
     public function testLimitInvalideRenvoie400(): void

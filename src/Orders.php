@@ -32,7 +32,7 @@ final class Orders
      * Retourne une page de commandes (curseur par id).
      * Récupère limit+1 lignes pour détecter s'il en reste davantage.
      *
-     * @return array{data: list<array<string,mixed>>, pagination: array{next_cursor: int|null, has_more: bool}}
+     * @return array{data: list<array<string,mixed>>, pagination: array{limit: int, nextCursor: int|null, hasMore: bool}}
      */
     public function paginate(int $limit, ?int $afterId): array
     {
@@ -59,7 +59,7 @@ final class Orders
 
         return [
             'data'       => array_values($rows),
-            'pagination' => ['next_cursor' => $nextCursor, 'has_more' => $hasMore],
+            'pagination' => ['limit' => $limit, 'nextCursor' => $nextCursor, 'hasMore' => $hasMore],
         ];
     }
 }
