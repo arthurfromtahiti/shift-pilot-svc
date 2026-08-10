@@ -3,6 +3,7 @@
 require_once dirname(__DIR__) . '/vendor/autoload.php';
 
 use App\Db;
+use App\Orders;
 use App\Router;
 
 header('Content-Type: application/json; charset=utf-8');
@@ -25,6 +26,36 @@ switch ($path) {
 
     case '/version':
         echo json_encode($version + ['schemaVersion' => Db::schemaVersion($pdo)]);
+        break;
+
+    case '/orders':
+        $qLimit = $_GET['limit'] ?? null;
+        $qAfter = $_GET['after'] ?? null;
+        if ($qLimit !== null || $qAfter !== null) {
+            if ($qAfter !== null && $qLimit === null) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Paramètre limit requis quand after est fourni']);
+                break;
+            }
+            $limitInt = filter_var($qLimit, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 100]]);
+            if ($limitInt === false) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Paramètre limit invalide : entier entre 1 et 100 attendu']);
+                break;
+            }
+            $afterInt = null;
+            if ($qAfter !== null) {
+                $afterInt = filter_var($qAfter, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+                if ($afterInt === false) {
+                    http_response_code(400);
+                    echo json_encode(['error' => 'Paramètre after invalide : entier >= 0 attendu']);
+                    break;
+                }
+            }
+            echo json_encode((new Orders($pdo))->paginate($limitInt, $afterInt));
+        } else {
+            echo json_encode((new Orders($pdo))->all());
+        }
         break;
 
     default:
