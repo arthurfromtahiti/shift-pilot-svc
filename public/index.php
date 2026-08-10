@@ -32,7 +32,12 @@ switch ($path) {
         $qLimit = $_GET['limit'] ?? null;
         $qAfter = $_GET['after'] ?? null;
         if ($qLimit !== null || $qAfter !== null) {
-            $limitInt = filter_var($qLimit ?? 20, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 100]]);
+            if ($qAfter !== null && $qLimit === null) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Paramètre limit requis quand after est fourni']);
+                break;
+            }
+            $limitInt = filter_var($qLimit, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 100]]);
             if ($limitInt === false) {
                 http_response_code(400);
                 echo json_encode(['error' => 'Paramètre limit invalide : entier entre 1 et 100 attendu']);
