@@ -44,14 +44,9 @@ jobs:
           set -euo pipefail
           CIBLE="${{ steps.env.outputs.cible }}"
           SCHEMA=$(php -r 'require "vendor/autoload.php"; echo App\Db::schemaVersion(App\Db::connect());')
-          # On repart du contenu DEJA publie : sans ca, chaque environnement
-          # ecraserait le version.json de l'autre (constate au premier deploiement).
-          if git fetch origin deployed --depth 1 2>/dev/null && git rev-parse --verify FETCH_HEAD >/dev/null 2>&1; then
-            git checkout -B deployed FETCH_HEAD
-          else
-            git checkout --orphan deployed
-            git rm -rf --cached . >/dev/null 2>&1 || true
-          fi
+          git fetch origin deployed --depth 1 || true
+          git checkout -B deployed "origin/deployed" 2>/dev/null || git checkout --orphan deployed
+          git rm -rf --cached . >/dev/null 2>&1 || true
           mkdir -p "$CIBLE"
           cat > "$CIBLE/version.json" <<JSON
           {
