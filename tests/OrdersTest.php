@@ -24,7 +24,25 @@ final class OrdersTest extends TestCase
 
     public function testListeToutesLesCommandes(): void
     {
-        self::assertCount(5, (new Orders($this->pdo))->all());
+        $orders = (new Orders($this->pdo))->all();
+        self::assertCount(5, $orders);
+        foreach ($orders as $o) {
+            self::assertArrayHasKey('clientRef', $o);
+            self::assertArrayHasKey('client', $o);
+        }
+        self::assertSame('CLI-HEIATA', $orders[0]['clientRef']);
+        self::assertSame('Heiata', $orders[0]['client']);
+    }
+
+    public function testListeLimiteeContientClientRef(): void
+    {
+        $orders = (new Orders($this->pdo))->limited(2);
+        self::assertCount(2, $orders);
+        foreach ($orders as $o) {
+            self::assertArrayHasKey('clientRef', $o);
+            self::assertArrayHasKey('client', $o);
+        }
+        self::assertSame('CLI-HEIATA', $orders[0]['clientRef']);
     }
 
     public function testTrouveUneCommandeParIdentifiant(): void
@@ -33,6 +51,8 @@ final class OrdersTest extends TestCase
         self::assertNotNull($o);
         self::assertSame('Manoa', $o['client']);
         self::assertSame(960000, (int) $o['montant_cents']);
+        self::assertArrayHasKey('clientRef', $o);
+        self::assertSame('CLI-MANOA', $o['clientRef']);
     }
 
     public function testIdentifiantInconnuRenvoieNull(): void
