@@ -42,6 +42,11 @@ switch ($path) {
             echo json_encode($order);
             break;
         }
+        if (preg_match('#^/orders/[^/]+$#', $path)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Identifiant invalide']);
+            break;
+        }
         http_response_code(404);
         echo json_encode(['error' => 'Route inconnue']);
 }
