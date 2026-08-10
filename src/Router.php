@@ -9,10 +9,20 @@ final class Router
 {
     public function __construct(private PDO $pdo) {}
 
-    /** @return array{0: int, 1: mixed} */
-    public function dispatch(string $path): array
+    /**
+     * @param array<string, string> $query
+     * @return array{0: int, 1: mixed}
+     */
+    public function dispatch(string $path, array $query = []): array
     {
         if ($path === '/orders') {
+            if (isset($query['limit'])) {
+                $val = filter_var($query['limit'], FILTER_VALIDATE_INT);
+                if ($val === false || $val <= 0) {
+                    return [400, ['error' => 'Paramètre limit invalide']];
+                }
+                return [200, (new Orders($this->pdo))->limited($val)];
+            }
             return [200, (new Orders($this->pdo))->all()];
         }
 
