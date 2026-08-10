@@ -61,4 +61,40 @@ final class RouterTest extends TestCase
         self::assertSame(404, $status);
         self::assertArrayHasKey('error', $body);
     }
+
+    public function testLimitRenvoie200AvecAuPlusNCommandes(): void
+    {
+        [$status, $body] = $this->router->dispatch('/orders', ['limit' => '2']);
+        self::assertSame(200, $status);
+        self::assertIsArray($body);
+        self::assertLessThanOrEqual(2, count($body));
+    }
+
+    public function testLimitZeroRenvoie400(): void
+    {
+        [$status, $body] = $this->router->dispatch('/orders', ['limit' => '0']);
+        self::assertSame(400, $status);
+        self::assertArrayHasKey('error', $body);
+    }
+
+    public function testLimitNegatifRenvoie400(): void
+    {
+        [$status, $body] = $this->router->dispatch('/orders', ['limit' => '-3']);
+        self::assertSame(400, $status);
+        self::assertArrayHasKey('error', $body);
+    }
+
+    public function testLimitNonNumeriqueRenvoie400(): void
+    {
+        [$status, $body] = $this->router->dispatch('/orders', ['limit' => 'abc']);
+        self::assertSame(400, $status);
+        self::assertArrayHasKey('error', $body);
+    }
+
+    public function testSansLimitComportementActuel(): void
+    {
+        [$status, $body] = $this->router->dispatch('/orders');
+        self::assertSame(200, $status);
+        self::assertCount(5, $body);
+    }
 }
