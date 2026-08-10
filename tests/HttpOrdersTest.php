@@ -76,6 +76,15 @@ final class HttpOrdersTest extends TestCase
         self::assertArrayHasKey('id', $r['body']);
     }
 
+    public function testCommandeExistanteExposeClientRef(): void
+    {
+        $r = $this->request('/orders/1');
+        self::assertSame(200, $r['status']);
+        self::assertIsArray($r['body']);
+        self::assertArrayHasKey('clientRef', $r['body']);
+        self::assertSame('CLI-HEIATA', $r['body']['clientRef']);
+    }
+
     public function testCommandeInexistanteRenvoie404(): void
     {
         $r = $this->request('/orders/9999');
