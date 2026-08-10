@@ -39,12 +39,12 @@ final class Orders
         $fetch = $limit + 1;
         if ($afterId !== null) {
             $st = $this->pdo->prepare(
-                'SELECT id, client, montant_cents, devise, statut FROM orders WHERE id > :after ORDER BY id LIMIT :limit'
+                'SELECT id, client, montant_cents, devise, statut, client_ref AS clientRef FROM orders WHERE id > :after ORDER BY id LIMIT :limit'
             );
             $st->bindValue(':after', $afterId, PDO::PARAM_INT);
         } else {
             $st = $this->pdo->prepare(
-                'SELECT id, client, montant_cents, devise, statut FROM orders ORDER BY id LIMIT :limit'
+                'SELECT id, client, montant_cents, devise, statut, client_ref AS clientRef FROM orders ORDER BY id LIMIT :limit'
             );
         }
         $st->bindValue(':limit', $fetch, PDO::PARAM_INT);
