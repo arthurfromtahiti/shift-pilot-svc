@@ -3,7 +3,7 @@
 require_once dirname(__DIR__) . '/vendor/autoload.php';
 
 use App\Db;
-use App\Orders;
+use App\Router;
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -27,26 +27,8 @@ switch ($path) {
         echo json_encode($version + ['schemaVersion' => Db::schemaVersion($pdo)]);
         break;
 
-    case '/orders':
-        echo json_encode((new Orders($pdo))->all());
-        break;
-
     default:
-        if (preg_match('#^/orders/(\d+)$#', $path, $m)) {
-            $order = (new Orders($pdo))->find((int) $m[1]);
-            if ($order === null) {
-                http_response_code(404);
-                echo json_encode(['error' => 'Commande introuvable']);
-                break;
-            }
-            echo json_encode($order);
-            break;
-        }
-        if (preg_match('#^/orders/[^/]+$#', $path)) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Identifiant invalide']);
-            break;
-        }
-        http_response_code(404);
-        echo json_encode(['error' => 'Route inconnue']);
+        [$status, $body] = (new Router($pdo))->dispatch($path);
+        http_response_code($status);
+        echo json_encode($body);
 }
