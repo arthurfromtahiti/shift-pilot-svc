@@ -62,7 +62,20 @@ echo "sauvegarde écrite : " . basename($sauvegarde) . "\n";
 foreach ($aFaire as $v => $f) {
     $pdo->beginTransaction();
     try {
-        $pdo->exec((string) file_get_contents($f));
+        $statements = array_filter(array_map('trim', explode(';', (string) file_get_contents($f))));
+        foreach ($statements as $stmt) {
+            try {
+                $pdo->exec($stmt);
+            } catch (\Throwable $e) {
+                // ALTER TABLE ADD COLUMN échoue si la colonne existe déjà : on saute uniquement
+                // l'ALTER — les instructions suivantes (backfill UPDATE) s'exécutent quand même.
+                if (preg_match('/^\s*ALTER\s+TABLE\s+\S+\s+ADD\s+COLUMN/i', $stmt)
+                    && str_contains($e->getMessage(), 'duplicate column name')) {
+                    continue;
+                }
+                throw $e;
+            }
+        }
         $st = $pdo->prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (:v, :t)');
         $st->execute([':v' => $v, ':t' => gmdate('c')]);
         $pdo->commit();
