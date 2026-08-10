@@ -177,11 +177,10 @@ final class HttpOrdersTest extends TestCase
         self::assertArrayHasKey('error', $r['body']);
     }
 
-    public function testAfterSeulSansLimitUtiliseDefaut(): void
+    public function testAfterSeulSansLimitRenvoie400(): void
     {
         $r = $this->request('/orders?after=1');
-        self::assertSame(200, $r['status']);
-        self::assertArrayHasKey('data', $r['body']);
-        self::assertCount(4, $r['body']['data']);
+        self::assertSame(400, $r['status']);
+        self::assertArrayHasKey('error', $r['body']);
     }
 }
