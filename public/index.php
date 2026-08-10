@@ -28,7 +28,28 @@ switch ($path) {
         break;
 
     case '/orders':
-        echo json_encode((new Orders($pdo))->all());
+        $qLimit = $_GET['limit'] ?? null;
+        $qAfter = $_GET['after'] ?? null;
+        if ($qLimit !== null || $qAfter !== null) {
+            $limitInt = filter_var($qLimit ?? 20, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 100]]);
+            if ($limitInt === false) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Paramètre limit invalide : entier entre 1 et 100 attendu']);
+                break;
+            }
+            $afterInt = null;
+            if ($qAfter !== null) {
+                $afterInt = filter_var($qAfter, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+                if ($afterInt === false) {
+                    http_response_code(400);
+                    echo json_encode(['error' => 'Paramètre after invalide : entier >= 0 attendu']);
+                    break;
+                }
+            }
+            echo json_encode((new Orders($pdo))->paginate($limitInt, $afterInt));
+        } else {
+            echo json_encode((new Orders($pdo))->all());
+        }
         break;
 
     default:
