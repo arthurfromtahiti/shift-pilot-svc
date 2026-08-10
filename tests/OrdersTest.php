@@ -53,4 +53,51 @@ final class OrdersTest extends TestCase
         // Aucune ligne dans schema_migrations tant que bin/migrate.php n'a pas tourné.
         self::assertSame(0, Db::schemaVersion($this->pdo));
     }
+
+    public function testPaginatePremierePage(): void
+    {
+        $r = (new Orders($this->pdo))->paginate(2, null);
+        self::assertArrayHasKey('data', $r);
+        self::assertArrayHasKey('pagination', $r);
+        self::assertCount(2, $r['data']);
+        self::assertSame(1, (int) $r['data'][0]['id']);
+        self::assertSame(2, (int) $r['data'][1]['id']);
+        self::assertTrue($r['pagination']['has_more']);
+        self::assertSame(2, $r['pagination']['next_cursor']);
+    }
+
+    public function testPaginateAvecCurseur(): void
+    {
+        $r = (new Orders($this->pdo))->paginate(2, 2);
+        self::assertCount(2, $r['data']);
+        self::assertSame(3, (int) $r['data'][0]['id']);
+        self::assertSame(4, (int) $r['data'][1]['id']);
+        self::assertTrue($r['pagination']['has_more']);
+        self::assertSame(4, $r['pagination']['next_cursor']);
+    }
+
+    public function testPaginateDernierePage(): void
+    {
+        $r = (new Orders($this->pdo))->paginate(2, 4);
+        self::assertCount(1, $r['data']);
+        self::assertSame(5, (int) $r['data'][0]['id']);
+        self::assertFalse($r['pagination']['has_more']);
+        self::assertNull($r['pagination']['next_cursor']);
+    }
+
+    public function testPaginateSansCurseurHasMoreFalsiAvecTout(): void
+    {
+        $r = (new Orders($this->pdo))->paginate(10, null);
+        self::assertCount(5, $r['data']);
+        self::assertFalse($r['pagination']['has_more']);
+        self::assertNull($r['pagination']['next_cursor']);
+    }
+
+    public function testPaginateCurseurApresLaDerniere(): void
+    {
+        $r = (new Orders($this->pdo))->paginate(5, 5);
+        self::assertCount(0, $r['data']);
+        self::assertFalse($r['pagination']['has_more']);
+        self::assertNull($r['pagination']['next_cursor']);
+    }
 }
